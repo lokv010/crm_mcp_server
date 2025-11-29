@@ -7,7 +7,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:api": "node dist/rest-api.js",
     "dev": "tsc --watch",
+    "dev:api": "tsc && node dist/rest-api.js",
     "prepare": "npm run build"
   },
   "keywords": [
@@ -22,9 +24,15 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.5",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.2.1",
     "googleapis": "^144.0.0",
-    "node-fetch": "^3.3.2",
-    "dotenv": "^16.4.5"
+    "helmet": "^8.1.0",
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
