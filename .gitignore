@@ -70,6 +70,12 @@ web_modules/
 .env.*
 !.env.example
 
+# Google Cloud credentials
+credentials.json
+*.json
+!package.json
+!tsconfig.json
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache
