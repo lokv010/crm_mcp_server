@@ -26,6 +26,26 @@ A Model Context Protocol (MCP) server to automate customer support processes wit
 - Professional HTML email templates
 - Automatic date/time formatting
 
+## 🤖 OpenAI Agent Integration
+
+This server includes a **REST API wrapper** that makes all MCP tools available via HTTP endpoints, making it easy to integrate with OpenAI agents!
+
+📘 **[Complete OpenAI Setup Guide](./OPENAI_AGENT_SETUP.md)** - Step-by-step instructions for integrating with OpenAI agents
+
+Quick links:
+- **[OpenAPI Specification](./openai-api-spec.yaml)** - Import this into your OpenAI agent
+- **[Google Sheets Credentials Setup](./google_cred/README.md)** - How to set up Google credentials
+- **[REST API Documentation](./REST_API_GUIDE.md)** - Full API reference
+
+### Quick Start for OpenAI
+
+1. **Set up Google Sheets credentials** (see `google_cred/README.md`)
+2. **Start the REST API server**: `npm run start:api`
+3. **Import the OpenAPI spec** into your OpenAI agent: `openai-api-spec.yaml`
+4. **Start using the tools** in your agent conversations!
+
+See [OPENAI_AGENT_SETUP.md](./OPENAI_AGENT_SETUP.md) for complete details.
+
 ## Prerequisites
 
 - Node.js 18+ and npm
