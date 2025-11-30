@@ -27,3 +27,25 @@ export interface CalendlyEvent {
   duration: number;
   active: boolean;
 }
+
+export interface EmailConfirmation {
+  to: string;
+  subject: string;
+  customerName: string;
+  appointmentDetails: {
+    eventType: string;
+    startTime: string;
+    endTime?: string;
+    timezone: string;
+    location?: string;
+  };
+  additionalInfo?: string;
+}
+
+export interface EmailStatus {
+  messageId: string;
+  to: string;
+  status: 'sent' | 'failed';
+  timestamp: string;
+  error?: string;
+}

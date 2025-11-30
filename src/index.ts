@@ -2,6 +2,7 @@
 
 import { GoogleSheetsMCPServer } from './sheets-server.js';
 import { CalendlyMCPServer } from './calendly-server.js';
+import { EmailMCPServer } from './email-server.js';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
@@ -54,6 +55,21 @@ function logConnectionDetails() {
     }
   }
 
+  if (SERVER_TYPE === 'email' || SERVER_TYPE === 'all') {
+    console.error('\n--- Email Configuration (SendGrid) ---');
+    const apiKey = process.env.SENDGRID_API_KEY;
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL;
+    const fromName = process.env.SENDGRID_FROM_NAME;
+
+    if (apiKey && fromEmail) {
+      // Show masked API key for security
+      const maskedKey = apiKey.substring(0, 8) + '...' + apiKey.substring(apiKey.length - 4);
+      console.error(`API Key: ${maskedKey} (masked)`);
+      console.error(`From Email: ${fromEmail}`);
+      console.error(`From Name: ${fromName || 'CRM Support'}`);
+    }
+  }
+
   console.error('\n--- MCP Client Configuration Example ---');
   console.error('For Claude Desktop (claude_desktop_config.json):');
   console.error(JSON.stringify({
@@ -70,6 +86,11 @@ function logConnectionDetails() {
           ...(process.env.CALENDLY_API_TOKEN && {
             CALENDLY_API_TOKEN: process.env.CALENDLY_API_TOKEN,
             CALENDLY_ORGANIZATION_URI: process.env.CALENDLY_ORGANIZATION_URI
+          }),
+          ...(process.env.SENDGRID_API_KEY && {
+            SENDGRID_API_KEY: process.env.SENDGRID_API_KEY,
+            SENDGRID_FROM_EMAIL: process.env.SENDGRID_FROM_EMAIL,
+            SENDGRID_FROM_NAME: process.env.SENDGRID_FROM_NAME
           })
         }
       }
@@ -121,9 +142,26 @@ async function main() {
       }
     }
 
-    if (SERVER_TYPE !== 'sheets' && SERVER_TYPE !== 'calendly' && SERVER_TYPE !== 'all') {
+    if (SERVER_TYPE === 'email' || SERVER_TYPE === 'all') {
+      const apiKey = process.env.SENDGRID_API_KEY;
+      const fromEmail = process.env.SENDGRID_FROM_EMAIL;
+      const fromName = process.env.SENDGRID_FROM_NAME || 'CRM Support';
+
+      if (!apiKey || !fromEmail) {
+        console.error('Error: SendGrid configuration missing');
+        console.error('Please set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL in .env');
+        if (SERVER_TYPE === 'email') {
+          process.exit(1);
+        }
+      } else {
+        const emailServer = new EmailMCPServer(apiKey, fromEmail, fromName);
+        await emailServer.start();
+      }
+    }
+
+    if (SERVER_TYPE !== 'sheets' && SERVER_TYPE !== 'calendly' && SERVER_TYPE !== 'email' && SERVER_TYPE !== 'all') {
       console.error(`Error: Invalid MCP_SERVER_TYPE: ${SERVER_TYPE}`);
-      console.error('Valid options are: sheets, calendly, all');
+      console.error('Valid options are: sheets, calendly, email, all');
       process.exit(1);
     }
   } catch (error) {

@@ -19,12 +19,20 @@ A Model Context Protocol (MCP) server to automate customer support processes wit
 - Cancel appointments
 - Access invitee details
 
+### Email Notifications (SendGrid)
+- Send appointment confirmation emails
+- Send appointment reminder emails
+- Send custom emails with personalized content
+- Professional HTML email templates
+- Automatic date/time formatting
+
 ## Prerequisites
 
 - Node.js 18+ and npm
 - Google Cloud Project with Sheets API enabled
 - Google Service Account credentials
 - Calendly account with API access
+- SendGrid account with API key
 - A Google Spreadsheet for customer records
 
 ## Installation
@@ -90,7 +98,18 @@ npm run build
    - You can get this from the API by calling `https://api.calendly.com/users/me` with your token
    - The response will include your organization URI
 
-### 3. Environment Variables
+### 3. SendGrid Setup
+
+1. Create a [SendGrid account](https://signup.sendgrid.com/) (free tier available)
+2. Navigate to Settings > API Keys
+3. Click "Create API Key"
+4. Select "Full Access" or restrict to "Mail Send" only
+5. Copy the generated API key
+6. Verify a sender email address:
+   - Go to Settings > Sender Authentication
+   - Follow the steps to verify your email or domain
+
+### 4. Environment Variables
 
 Create a `.env` file in the project root:
 
@@ -109,9 +128,14 @@ GOOGLE_SHEETS_SPREADSHEET_ID=your_spreadsheet_id_here
 CALENDLY_API_TOKEN=your_calendly_api_token_here
 CALENDLY_ORGANIZATION_URI=https://api.calendly.com/organizations/your_org_id
 
+# SendGrid Email Configuration
+SENDGRID_API_KEY=your_sendgrid_api_key_here
+SENDGRID_FROM_EMAIL=noreply@yourdomain.com
+SENDGRID_FROM_NAME=CRM Support
+
 # MCP Server Configuration
 MCP_SERVER_NAME=crm-mcp-server
-# Options: sheets, calendly, all
+# Options: sheets, calendly, email, all
 MCP_SERVER_TYPE=all
 ```
 
@@ -170,6 +194,16 @@ Add to your Claude Desktop configuration file:
         "MCP_SERVER_TYPE": "calendly",
         "CALENDLY_API_TOKEN": "your_api_token",
         "CALENDLY_ORGANIZATION_URI": "your_org_uri"
+      }
+    },
+    "crm-email": {
+      "command": "node",
+      "args": ["/path/to/crm_mcp_server/dist/index.js"],
+      "env": {
+        "MCP_SERVER_TYPE": "email",
+        "SENDGRID_API_KEY": "your_api_key",
+        "SENDGRID_FROM_EMAIL": "noreply@yourdomain.com",
+        "SENDGRID_FROM_NAME": "CRM Support"
       }
     }
   }
@@ -281,6 +315,53 @@ Cancel a scheduled event.
 - `eventUri` (required): Event URI
 - `reason` (optional): Cancellation reason
 
+### Email Tools
+
+#### `send_appointment_confirmation`
+Send a professional appointment confirmation email with all booking details.
+
+**Parameters:**
+- `to` (required): Recipient email address
+- `subject` (optional): Email subject line (auto-generated if not provided)
+- `customerName` (required): Customer name for personalization
+- `appointmentDetails` (required): Object containing:
+  - `eventType` (required): Type of appointment/event
+  - `startTime` (required): Appointment start time (ISO 8601 format)
+  - `endTime` (optional): Appointment end time (ISO 8601 format)
+  - `timezone` (required): Timezone for the appointment
+  - `location` (optional): Meeting location or link
+- `additionalInfo` (optional): Additional information or notes
+
+**Example:**
+```json
+{
+  "to": "customer@example.com",
+  "customerName": "John Doe",
+  "appointmentDetails": {
+    "eventType": "Technical Support Session",
+    "startTime": "2025-12-01T14:00:00Z",
+    "endTime": "2025-12-01T15:00:00Z",
+    "timezone": "America/New_York",
+    "location": "https://zoom.us/j/123456789"
+  },
+  "additionalInfo": "Please prepare any error messages or screenshots before the call."
+}
+```
+
+#### `send_appointment_reminder`
+Send an appointment reminder email before the scheduled appointment.
+
+**Parameters:** Same as `send_appointment_confirmation`
+
+#### `send_custom_email`
+Send a custom email with specified content.
+
+**Parameters:**
+- `to` (required): Recipient email address
+- `subject` (required): Email subject line
+- `text` (required): Plain text email content
+- `html` (optional): HTML email content
+
 ## Example Workflows
 
 ### Customer Support Workflow
@@ -290,8 +371,10 @@ Cancel a scheduled event.
 3. Use `list_event_types` to find appropriate appointment types
 4. Use `get_scheduling_link` to get a booking link
 5. Share the link with the customer
-6. Use `update_customer_record` to update status as the issue progresses
-7. Use `list_scheduled_events` to view upcoming appointments
+6. When appointment is booked, use `send_appointment_confirmation` to send confirmation email
+7. Use `update_customer_record` to update status as the issue progresses
+8. Use `send_appointment_reminder` to remind customers before appointments
+9. Use `list_scheduled_events` to view upcoming appointments
 
 ### Searching Customer History
 
@@ -309,6 +392,7 @@ crm_mcp_server/
 │   ├── index.ts              # Main entry point
 │   ├── sheets-server.ts      # Google Sheets MCP server
 │   ├── calendly-server.ts    # Calendly MCP server
+│   ├── email-server.ts       # Email notifications MCP server
 │   └── types.ts              # TypeScript interfaces
 ├── dist/                     # Compiled JavaScript
 ├── .env.example              # Environment template
@@ -341,6 +425,13 @@ npm run dev
 - **Invalid token**: Verify your API token is correct and active
 - **Organization not found**: Check your organization URI format
 - **Rate limiting**: Calendly has API rate limits, wait and retry
+
+### SendGrid Email Issues
+
+- **Authentication failed**: Verify your SendGrid API key is correct
+- **Sender email not verified**: You must verify your sender email in SendGrid settings
+- **Email not received**: Check spam folder, verify recipient email address
+- **Template errors**: Check that all required fields are provided in appointmentDetails
 
 ## Security Notes
 
