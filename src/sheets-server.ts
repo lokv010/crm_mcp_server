@@ -75,6 +75,8 @@ export class GoogleSheetsMCPServer {
             return await this.searchCustomerRecords(args as any);
           case 'list_all_customers':
             return await this.listAllCustomers();
+          case 'check_customer_history':
+            return await this.checkCustomerHistory((args as any).phone_number as string);
           case 'initialize_sheet':
             return await this.initializeSheet();
           default:
@@ -235,6 +237,20 @@ export class GoogleSheetsMCPServer {
         inputSchema: {
           type: 'object',
           properties: {},
+        },
+      },
+      {
+        name: 'check_customer_history',
+        description: 'Retrieve customer service history by phone number from Google Sheets',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            phone_number: {
+              type: 'string',
+              description: 'Customer phone number to search for',
+            },
+          },
+          required: ['phone_number'],
         },
       },
     ];
@@ -524,6 +540,80 @@ export class GoogleSheetsMCPServer {
         },
       ],
     };
+  }
+
+  private async checkCustomerHistory(phoneNumber: string) {
+    try {
+      // Search for customer by phone number in the CustomerRecords sheet
+      const response = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: this.spreadsheetId,
+        range: `${SHEET_NAME}!A2:J`,
+      });
+
+      const values = response.data.values;
+      if (!values || values.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `No customer found with phone number: ${phoneNumber}`,
+            },
+          ],
+        };
+      }
+
+      // Filter by phone number (column D/index 3)
+      const matchingRecords = values.filter((row) => {
+        const phone = row[3]?.toString().trim();
+        return phone === phoneNumber.trim();
+      });
+
+      if (matchingRecords.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `No customer found with phone number: ${phoneNumber}`,
+            },
+          ],
+        };
+      }
+
+      // Format the customer history
+      const customerHistory = matchingRecords.map((row) => ({
+        id: row[0],
+        name: row[1],
+        email: row[2],
+        phone: row[3],
+        issue: row[4],
+        status: row[5],
+        priority: row[6],
+        createdAt: row[7],
+        updatedAt: row[8],
+        notes: row[9],
+      }));
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                phone_number: phoneNumber,
+                customer_name: customerHistory[0].name,
+                customer_email: customerHistory[0].email,
+                total_records: customerHistory.length,
+                service_history: customerHistory,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error) {
+      throw new Error(`Failed to check customer history: ${error}`);
+    }
   }
 
   async start() {
