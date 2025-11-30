@@ -559,6 +559,195 @@ app.get('/api/docs', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * GET /openapi.json - OpenAPI 3.0 Specification for OpenAI Agent Builder
+ */
+app.get('/openapi.json', async (req: Request, res: Response) => {
+  try {
+    const servers = mcpBridge.getAvailableServers();
+    const allTools = await mcpBridge.getAllTools();
+
+    // Build OpenAPI paths dynamically from available tools
+    const paths: Record<string, any> = {
+      '/health': {
+        get: {
+          summary: 'Health check endpoint',
+          operationId: 'healthCheck',
+          responses: {
+            '200': {
+              description: 'Server health status',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      status: { type: 'string' },
+                      timestamp: { type: 'string' },
+                      servers: { type: 'array', items: { type: 'string' } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/api/servers': {
+        get: {
+          summary: 'List all available MCP servers',
+          operationId: 'listServers',
+          responses: {
+            '200': {
+              description: 'List of servers',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean' },
+                      servers: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            name: { type: 'string' },
+                            displayName: { type: 'string' },
+                            description: { type: 'string' },
+                            toolCount: { type: 'number' },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/api/tools': {
+        get: {
+          summary: 'List all tools from all servers',
+          operationId: 'listAllTools',
+          responses: {
+            '200': {
+              description: 'All available tools',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean' },
+                      tools: { type: 'object' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    // Add tool-specific endpoints
+    for (const [serverName, tools] of Object.entries(allTools)) {
+      for (const tool of tools) {
+        const pathName = `/api/servers/${serverName}/tools/${tool.name}`;
+        paths[pathName] = {
+          post: {
+            summary: tool.description || `Execute ${tool.name}`,
+            operationId: `${serverName}_${tool.name}`,
+            requestBody: {
+              required: true,
+              content: {
+                'application/json': {
+                  schema: tool.inputSchema || { type: 'object' },
+                },
+              },
+            },
+            responses: {
+              '200': {
+                description: 'Tool execution result',
+                content: {
+                  'application/json': {
+                    schema: {
+                      type: 'object',
+                      properties: {
+                        success: { type: 'boolean' },
+                        content: {
+                          type: 'array',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              type: { type: 'string' },
+                              text: { type: 'string' },
+                            },
+                          },
+                        },
+                        error: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+              '400': {
+                description: 'Bad request',
+                content: {
+                  'application/json': {
+                    schema: {
+                      type: 'object',
+                      properties: {
+                        success: { type: 'boolean' },
+                        error: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+    }
+
+    const openapi = {
+      openapi: '3.0.0',
+      info: {
+        title: 'CRM MCP REST API',
+        version: '1.0.0',
+        description: 'REST API wrapper for MCP servers (Google Sheets CRM and Calendly)',
+      },
+      servers: [
+        {
+          url: `http://localhost:${PORT}`,
+          description: 'Local development server',
+        },
+      ],
+      paths,
+      components: {
+        securitySchemes: API_KEY
+          ? {
+              ApiKeyAuth: {
+                type: 'apiKey',
+                in: 'header',
+                name: 'x-api-key',
+              },
+            }
+          : {},
+      },
+      security: API_KEY ? [{ ApiKeyAuth: [] }] : [],
+    };
+
+    res.json(openapi);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    res.status(500).json({
+      success: false,
+      error: errorMessage,
+    });
+  }
+});
+
 // 404 handler
 app.use((req: Request, res: Response) => {
   res.status(404).json({
