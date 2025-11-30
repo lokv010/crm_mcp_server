@@ -100,6 +100,9 @@ app.get('/', (req: Request, res: Response) => {
       allTools: 'GET /api/tools',
       callTool: 'POST /api/servers/:server/tools/:tool',
       genericCall: 'POST /api/call',
+      checkCustomer: 'GET /api/google-sheets/check-customer',
+      listAvailability: 'GET /api/calendly/list-availability',
+      scheduleEvent: 'POST /api/calendly/schedule-event',
     },
     authentication: API_KEY ? 'API Key required (x-api-key header or api_key query param)' : 'No authentication required',
   });
@@ -270,6 +273,126 @@ app.post('/api/call', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/google-sheets/check-customer - Check customer history by phone number
+ */
+app.get('/api/google-sheets/check-customer', async (req: Request, res: Response) => {
+  try {
+    const phoneNumber = req.query.phone_number as string;
+
+    if (!phoneNumber) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required parameter: phone_number',
+      });
+      return;
+    }
+
+    const call: MCPToolCall = {
+      server: 'sheets',
+      tool: 'check_customer_history',
+      arguments: { phone_number: phoneNumber },
+    };
+
+    const result = await mcpBridge.callTool(call);
+
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    res.status(500).json({
+      success: false,
+      error: errorMessage,
+    });
+  }
+});
+
+/**
+ * GET /api/calendly/list-availability - Check available appointment slots
+ */
+app.get('/api/calendly/list-availability', async (req: Request, res: Response) => {
+  try {
+    const { event_type_uri, start_time, end_time } = req.query;
+
+    if (!event_type_uri || !start_time || !end_time) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: event_type_uri, start_time, end_time',
+      });
+      return;
+    }
+
+    const call: MCPToolCall = {
+      server: 'calendly',
+      tool: 'check_availability',
+      arguments: {
+        eventTypeUri: event_type_uri as string,
+        startTime: start_time as string,
+        endTime: end_time as string,
+      },
+    };
+
+    const result = await mcpBridge.callTool(call);
+
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    res.status(500).json({
+      success: false,
+      error: errorMessage,
+    });
+  }
+});
+
+/**
+ * POST /api/calendly/schedule-event - Generate booking link for appointment
+ */
+app.post('/api/calendly/schedule-event', async (req: Request, res: Response) => {
+  try {
+    const { event_type_uri, name, email, phone } = req.body;
+
+    if (!event_type_uri || !name || !email) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required fields: event_type_uri, name, email',
+      });
+      return;
+    }
+
+    const call: MCPToolCall = {
+      server: 'calendly',
+      tool: 'book_appointment',
+      arguments: {
+        eventTypeUri: event_type_uri,
+        name,
+        email,
+        phone,
+      },
+    };
+
+    const result = await mcpBridge.callTool(call);
+
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    res.status(500).json({
+      success: false,
+      error: errorMessage,
+    });
+  }
+});
+
+/**
  * GET /api/docs - API Documentation
  */
 app.get('/api/docs', async (req: Request, res: Response) => {
@@ -400,6 +523,23 @@ app.get('/api/docs', async (req: Request, res: Response) => {
           curl: `curl -X POST -H "x-api-key: YOUR_API_KEY" -H "Content-Type: application/json" \\
   -d '{"name":"John Doe","email":"john@example.com","issue":"Login problem","status":"open","priority":"high"}' \\
   http://localhost:${PORT}/api/servers/sheets/tools/add_customer_record`,
+        },
+        {
+          title: 'Check customer history by phone',
+          request: 'GET /api/google-sheets/check-customer',
+          curl: `curl -H "x-api-key: YOUR_API_KEY" "http://localhost:${PORT}/api/google-sheets/check-customer?phone_number=555-1234"`,
+        },
+        {
+          title: 'Check availability',
+          request: 'GET /api/calendly/list-availability',
+          curl: `curl -H "x-api-key: YOUR_API_KEY" "http://localhost:${PORT}/api/calendly/list-availability?event_type_uri=https://api.calendly.com/event_types/XXXXXX&start_time=2024-01-15T00:00:00Z&end_time=2024-01-22T23:59:59Z"`,
+        },
+        {
+          title: 'Schedule appointment',
+          request: 'POST /api/calendly/schedule-event',
+          curl: `curl -X POST -H "x-api-key: YOUR_API_KEY" -H "Content-Type: application/json" \\
+  -d '{"event_type_uri":"https://api.calendly.com/event_types/XXXXXX","name":"John Doe","email":"john@example.com","phone":"555-1234"}' \\
+  http://localhost:${PORT}/api/calendly/schedule-event`,
         },
         {
           title: 'List Calendly event types',

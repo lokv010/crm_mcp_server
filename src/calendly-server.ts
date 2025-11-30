@@ -67,6 +67,10 @@ export class CalendlyMCPServer {
             return await this.getEventInvitee((args as any).inviteeUri as string);
           case 'cancel_event':
             return await this.cancelEvent((args as any).eventUri as string, (args as any).reason as string);
+          case 'check_availability':
+            return await this.checkAvailability((args as any).eventTypeUri as string, (args as any).startTime as string, (args as any).endTime as string);
+          case 'book_appointment':
+            return await this.bookAppointment(args as any);
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -174,6 +178,54 @@ export class CalendlyMCPServer {
             },
           },
           required: ['eventUri'],
+        },
+      },
+      {
+        name: 'check_availability',
+        description: 'Check available appointment slots for a specific event type within a date range',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            eventTypeUri: {
+              type: 'string',
+              description: 'The URI of the event type to check availability for',
+            },
+            startTime: {
+              type: 'string',
+              description: 'Start time for availability search (ISO 8601 format, e.g., 2024-01-15T00:00:00Z)',
+            },
+            endTime: {
+              type: 'string',
+              description: 'End time for availability search (ISO 8601 format, e.g., 2024-01-22T23:59:59Z)',
+            },
+          },
+          required: ['eventTypeUri', 'startTime', 'endTime'],
+        },
+      },
+      {
+        name: 'book_appointment',
+        description: 'Generate a pre-filled scheduling link for booking an appointment with customer information',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            eventTypeUri: {
+              type: 'string',
+              description: 'The URI of the event type to book',
+            },
+            name: {
+              type: 'string',
+              description: 'Customer name',
+            },
+            email: {
+              type: 'string',
+              description: 'Customer email address',
+            },
+            phone: {
+              type: 'string',
+              description: 'Customer phone number (optional)',
+            },
+          },
+          required: ['eventTypeUri', 'name', 'email'],
         },
       },
     ];
@@ -363,6 +415,99 @@ export class CalendlyMCPServer {
       };
     } catch (error) {
       throw new Error(`Failed to cancel event: ${error}`);
+    }
+  }
+
+  private async checkAvailability(eventTypeUri: string, startTime: string, endTime: string) {
+    try {
+      const endpoint = `/event_type_available_times?event_type=${encodeURIComponent(eventTypeUri)}&start_time=${encodeURIComponent(startTime)}&end_time=${encodeURIComponent(endTime)}`;
+
+      const data: any = await this.makeCalendlyRequest(endpoint);
+
+      if (!data.collection || data.collection.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `No available time slots found between ${startTime} and ${endTime}`,
+            },
+          ],
+        };
+      }
+
+      const availableSlots = data.collection.map((slot: any) => ({
+        start_time: slot.start_time,
+        status: slot.status,
+        invitees_remaining: slot.invitees_remaining,
+      }));
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                event_type: eventTypeUri,
+                search_period: {
+                  start: startTime,
+                  end: endTime,
+                },
+                total_slots: availableSlots.length,
+                available_times: availableSlots,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error) {
+      throw new Error(`Failed to check availability: ${error}`);
+    }
+  }
+
+  private async bookAppointment(details: { eventTypeUri: string; name: string; email: string; phone?: string }) {
+    try {
+      // Get the event type details to fetch the scheduling URL
+      const eventTypeData: any = await this.makeCalendlyRequest(`/event_types/${encodeURIComponent(details.eventTypeUri)}`);
+
+      const schedulingUrl = eventTypeData.resource.scheduling_url;
+
+      // Build pre-filled URL with customer information
+      const params = new URLSearchParams();
+      params.append('name', details.name);
+      params.append('email', details.email);
+      if (details.phone) {
+        params.append('a1', details.phone); // a1 is typically used for phone number in Calendly
+      }
+
+      const prefilledUrl = `${schedulingUrl}?${params.toString()}`;
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                success: true,
+                message: 'Booking link generated successfully',
+                event_name: eventTypeData.resource.name,
+                customer: {
+                  name: details.name,
+                  email: details.email,
+                  phone: details.phone || 'Not provided',
+                },
+                scheduling_url: prefilledUrl,
+                instructions: 'Share this pre-filled link with the customer to complete their booking. The customer will be able to select their preferred time slot.',
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error) {
+      throw new Error(`Failed to generate booking link: ${error}`);
     }
   }
 
