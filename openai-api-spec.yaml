@@ -1,0 +1,393 @@
+openapi: 3.0.0
+info:
+  title: CRM MCP API for OpenAI Agents
+  version: 1.0.0
+  description: |
+    Google Sheets CRM integration via Model Context Protocol (MCP).
+    This API provides customer record management and Calendly appointment booking.
+
+    **Setup**: See OPENAI_AGENT_SETUP.md for complete setup instructions.
+  contact:
+    name: CRM MCP Server
+    url: https://github.com/your-repo/crm_mcp_server
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+  - url: https://your-production-url.com
+    description: Production server (update this URL after deployment)
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Check API health status
+      security: []
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  timestamp:
+                    type: string
+                    format: date-time
+                  servers:
+                    type: array
+                    items:
+                      type: string
+
+  /api/tools:
+    get:
+      operationId: listAllTools
+      summary: List all available tools from all MCP servers
+      responses:
+        '200':
+          description: List of all available tools
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  tools:
+                    type: object
+
+  /api/servers/sheets/tools/initialize_sheet:
+    post:
+      operationId: initializeSheet
+      summary: Initialize Google Sheet with customer record headers
+      description: Run this once when setting up a new spreadsheet. Creates the sheet and adds column headers.
+      responses:
+        '200':
+          description: Sheet initialized successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResponse'
+
+  /api/servers/sheets/tools/add_customer_record:
+    post:
+      operationId: addCustomerRecord
+      summary: Add a new customer service record to Google Sheets
+      description: Creates a new customer support ticket with issue details, status, and priority.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - email
+                - issue
+                - status
+                - priority
+              properties:
+                name:
+                  type: string
+                  description: Customer's full name
+                  example: "John Doe"
+                email:
+                  type: string
+                  format: email
+                  description: Customer's email address
+                  example: "john.doe@example.com"
+                phone:
+                  type: string
+                  description: Customer's phone number
+                  example: "555-1234"
+                issue:
+                  type: string
+                  description: Description of the customer's issue or request
+                  example: "Cannot login to account"
+                status:
+                  type: string
+                  enum: [open, in-progress, resolved, closed]
+                  description: Current status of the support ticket
+                  example: "open"
+                priority:
+                  type: string
+                  enum: [low, medium, high, urgent]
+                  description: Priority level of the issue
+                  example: "high"
+                notes:
+                  type: string
+                  description: Additional notes or context about the issue
+                  example: "Customer reported error code 403"
+      responses:
+        '200':
+          description: Customer record added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResponse'
+        '400':
+          description: Bad request - missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/servers/sheets/tools/get_customer_record:
+    post:
+      operationId: getCustomerRecord
+      summary: Retrieve a specific customer record by ID
+      description: Get detailed information about a customer record using its row ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - id
+              properties:
+                id:
+                  type: string
+                  description: The customer record ID (row number in spreadsheet)
+                  example: "2"
+      responses:
+        '200':
+          description: Customer record retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResponse'
+        '404':
+          description: Customer record not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/servers/sheets/tools/update_customer_record:
+    post:
+      operationId: updateCustomerRecord
+      summary: Update an existing customer record
+      description: Modify fields in an existing customer support ticket. Only provided fields will be updated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - id
+              properties:
+                id:
+                  type: string
+                  description: The customer record ID to update
+                  example: "2"
+                name:
+                  type: string
+                  description: Customer's full name
+                email:
+                  type: string
+                  format: email
+                  description: Customer's email address
+                phone:
+                  type: string
+                  description: Customer's phone number
+                issue:
+                  type: string
+                  description: Description of the customer's issue
+                status:
+                  type: string
+                  enum: [open, in-progress, resolved, closed]
+                  description: Updated status
+                  example: "resolved"
+                priority:
+                  type: string
+                  enum: [low, medium, high, urgent]
+                  description: Updated priority
+                notes:
+                  type: string
+                  description: Updated or additional notes
+                  example: "Issue resolved - password reset"
+      responses:
+        '200':
+          description: Customer record updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResponse'
+
+  /api/servers/sheets/tools/search_customer_records:
+    post:
+      operationId: searchCustomerRecords
+      summary: Search customer records by criteria
+      description: Find customer records matching specified filters. All filters are optional and can be combined.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  description: Search by customer email (partial match)
+                  example: "john@example.com"
+                name:
+                  type: string
+                  description: Search by customer name (partial match)
+                  example: "John"
+                status:
+                  type: string
+                  enum: [open, in-progress, resolved, closed]
+                  description: Filter by ticket status
+                  example: "open"
+                priority:
+                  type: string
+                  enum: [low, medium, high, urgent]
+                  description: Filter by priority level
+                  example: "high"
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResponse'
+
+  /api/servers/sheets/tools/list_all_customers:
+    post:
+      operationId: listAllCustomers
+      summary: List all customer records
+      description: Retrieve all customer support tickets from the database.
+      responses:
+        '200':
+          description: List of all customer records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResponse'
+
+  /api/google-sheets/check-customer:
+    get:
+      operationId: checkCustomerHistory
+      summary: Check customer service history by phone number
+      description: Retrieve all past support tickets for a customer using their phone number.
+      parameters:
+        - name: phone_number
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Customer's phone number to search for
+          example: "555-1234"
+      responses:
+        '200':
+          description: Customer history retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResponse'
+        '404':
+          description: No customer found with that phone number
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/servers/calendly/tools/list_event_types:
+    post:
+      operationId: listCalendlyEventTypes
+      summary: List available Calendly appointment types
+      description: Get all available event types (appointment types) configured in Calendly.
+      responses:
+        '200':
+          description: List of event types
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResponse'
+
+  /api/calendly/schedule-event:
+    post:
+      operationId: scheduleCalendlyEvent
+      summary: Generate booking link for appointment
+      description: Create a personalized Calendly booking link for a customer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - event_type_uri
+                - name
+                - email
+              properties:
+                event_type_uri:
+                  type: string
+                  description: The Calendly event type URI (from list_event_types)
+                  example: "https://api.calendly.com/event_types/XXXXXX"
+                name:
+                  type: string
+                  description: Customer's full name
+                  example: "John Doe"
+                email:
+                  type: string
+                  format: email
+                  description: Customer's email address
+                  example: "john.doe@example.com"
+                phone:
+                  type: string
+                  description: Customer's phone number
+                  example: "555-1234"
+      responses:
+        '200':
+          description: Booking link generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResponse'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: |
+        API key for authentication. Set REST_API_KEY in your .env file to enable.
+        Include the key in the x-api-key header for all requests.
+
+  schemas:
+    ToolResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the operation was successful
+        content:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                example: "text"
+              text:
+                type: string
+                description: Response message or data (often JSON string)
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          description: Error message describing what went wrong
