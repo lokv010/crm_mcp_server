@@ -883,16 +883,21 @@ async function sendCustomEmail(params: any): Promise<any> {
 
 const app = express();
 app.use(express.json());
+
+// CORS configuration - allow OpenAI and other domains
 app.use(cors({
   origin: '*',
+  credentials: true,
   exposedHeaders: ['Mcp-Session-Id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Mcp-Session-Id'],
 }));
 
 // Create a single MCP server instance at startup
 const mcpServer = createMCPServer();
 
-// Store transports by session ID
-const transports: Record<string, StreamableHTTPServerTransport> = {};
+// Simple map to track active transports by session ID
+// The SDK manages session lifecycle via callbacks
+const activeTransports = new Map<string, StreamableHTTPServerTransport>();
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -907,39 +912,30 @@ app.get('/health', (req, res) => {
   });
 });
 
-// MCP endpoint - POST requests
+// MCP endpoint - POST requests for JSON-RPC messages
 app.post('/mcp', async (req, res) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
   try {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
     let transport: StreamableHTTPServerTransport;
 
-    if (sessionId && transports[sessionId]) {
-      // Reuse existing transport
-      transport = transports[sessionId];
+    if (sessionId && activeTransports.has(sessionId)) {
+      // Reuse existing transport for this session
+      transport = activeTransports.get(sessionId)!;
     } else {
-      // Create new transport for initialization
+      // Create new transport - SDK will handle session lifecycle via callbacks
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (sid) => {
-          console.log(`Session initialized: ${sid}`);
-          transports[sid] = transport;
+        onsessioninitialized: (sid: string) => {
+          activeTransports.set(sid, transport);
+          console.log(`Session ${sid} initialized`);
         },
-        onsessionclosed: (sid) => {
-          console.log(`Session closed: ${sid}`);
-          delete transports[sid];
+        onsessionclosed: (sid: string) => {
+          activeTransports.delete(sid);
+          console.log(`Session ${sid} closed`);
         },
       });
 
-      transport.onclose = () => {
-        const sid = transport.sessionId;
-        if (sid && transports[sid]) {
-          console.log(`Transport closed for session ${sid}`);
-          delete transports[sid];
-        }
-      };
-
-      // Connect transport to the shared MCP server instance
+      // Connect transport to the MCP server
       await mcpServer.connect(transport);
     }
 
@@ -952,7 +948,7 @@ app.post('/mcp', async (req, res) => {
         jsonrpc: '2.0',
         error: {
           code: -32603,
-          message: 'Internal server error',
+          message: error instanceof Error ? error.message : 'Internal server error',
         },
         id: null,
       });
@@ -960,30 +956,24 @@ app.post('/mcp', async (req, res) => {
   }
 });
 
-// MCP endpoint - GET requests (for SSE)
-app.get('/mcp', async (req, res) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
+// SSE endpoint - GET /messages for Server-Sent Events stream
+app.get('/messages', async (req, res) => {
+  try {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-  if (!sessionId || !transports[sessionId]) {
-    res.status(400).send('Invalid or missing session ID');
-    return;
+    if (!sessionId || !activeTransports.has(sessionId)) {
+      res.status(400).send('Session not found. Initialize session first via POST /mcp');
+      return;
+    }
+
+    const transport = activeTransports.get(sessionId)!;
+    await transport.handleRequest(req, res);
+  } catch (error) {
+    console.error('Error handling SSE request:', error);
+    if (!res.headersSent) {
+      res.status(500).send('Error establishing SSE connection');
+    }
   }
-
-  const transport = transports[sessionId];
-  await transport.handleRequest(req, res);
-});
-
-// MCP endpoint - DELETE requests (session termination)
-app.delete('/mcp', async (req, res) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
-  if (!sessionId || !transports[sessionId]) {
-    res.status(400).send('Invalid or missing session ID');
-    return;
-  }
-
-  const transport = transports[sessionId];
-  await transport.handleRequest(req, res);
 });
 
 // Start server
@@ -1008,14 +998,7 @@ app.listen(MCP_PORT, () => {
 // Handle shutdown
 process.on('SIGINT', async () => {
   console.log('\nShutting down server...');
-  for (const sessionId in transports) {
-    try {
-      await transports[sessionId].close();
-      delete transports[sessionId];
-    } catch (error) {
-      console.error(`Error closing transport for session ${sessionId}:`, error);
-    }
-  }
+  // The SDK handles transport cleanup automatically
   console.log('Server shutdown complete');
   process.exit(0);
 });
