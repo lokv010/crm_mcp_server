@@ -888,6 +888,9 @@ app.use(cors({
   exposedHeaders: ['Mcp-Session-Id'],
 }));
 
+// Create a single MCP server instance at startup
+const mcpServer = createMCPServer();
+
 // Store transports by session ID
 const transports: Record<string, StreamableHTTPServerTransport> = {};
 
@@ -936,9 +939,8 @@ app.post('/mcp', async (req, res) => {
         }
       };
 
-      // Connect transport to server
-      const server = createMCPServer();
-      await server.connect(transport);
+      // Connect transport to the shared MCP server instance
+      await mcpServer.connect(transport);
     }
 
     // Handle the request
