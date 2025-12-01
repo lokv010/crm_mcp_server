@@ -6,7 +6,7 @@ info:
     Google Sheets CRM integration via Model Context Protocol (MCP).
     This API provides customer record management and Calendly appointment booking.
 
-    **Setup**: See OPENAI_AGENT_SETUP.md for complete setup instructions.
+    **Setup**: See README.md for complete setup instructions.
   contact:
     name: CRM MCP Server
     url: https://github.com/your-repo/crm_mcp_server
