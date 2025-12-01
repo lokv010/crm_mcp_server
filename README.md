@@ -2,14 +2,15 @@
 
 A Model Context Protocol (MCP) server for customer relationship management with Google Sheets integration, Calendly appointment booking, and email notifications via SendGrid.
 
-**Includes REST API wrapper for OpenAI Agent integration.**
+**✓ Full MCP Protocol Support** - Works with OpenAI Agent Builder and Claude Desktop
 
 ## Features
 
 - **Google Sheets CRM**: Store and manage customer service records
 - **Calendly Integration**: Schedule appointments and manage bookings
 - **Email Notifications**: Send appointment confirmations and reminders via SendGrid
-- **REST API**: HTTP endpoints for OpenAI agents and other API clients
+- **MCP Protocol**: Native MCP server with HTTP/SSE transport for OpenAI Agent Builder
+- **Stdio Transport**: Traditional MCP server for Claude Desktop
 
 ## Quick Start
 
@@ -65,24 +66,34 @@ npm run build
 
 ## Usage
 
-### For OpenAI Agents (REST API)
+### For OpenAI Agent Builder (MCP Protocol)
 
-Start the REST API server:
+**This is the recommended way to use this server with OpenAI.**
+
+Start the MCP server:
 
 ```bash
-npm run start:api
+npm run start:mcp
 ```
 
-The server will run on `http://localhost:3000`.
+The server will run on `http://localhost:3100/mcp` by default.
 
-**Import OpenAPI Specification into OpenAI:**
-- Use the file: `openai-api-spec.yaml`
-- This provides all CRM tools to your OpenAI agent
+**Configure OpenAI Agent Builder:**
 
-**API Documentation:**
-- View available endpoints: `http://localhost:3000/api/docs`
-- Health check: `http://localhost:3000/health`
-- OpenAPI JSON: `http://localhost:3000/openapi.json`
+1. In OpenAI Agent Builder, add a new action
+2. Select "Connect to MCP Server"
+3. Enter the server URL: `http://localhost:3100/mcp`
+4. OpenAI will automatically discover all available tools via the MCP protocol
+
+**Verify it's working:**
+- Health check: `http://localhost:3100/health`
+- The server logs will show "Session initialized" when OpenAI connects
+- OpenAI Agent Builder should list all tools (Google Sheets, Calendly, Email)
+
+**What tools will be available?**
+- All Google Sheets CRM tools (if configured)
+- All Calendly appointment tools (if configured)
+- All SendGrid email tools (if configured)
 
 ### For MCP Clients (Claude Desktop)
 
@@ -136,23 +147,23 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 - `send_appointment_reminder` - Send appointment reminder
 - `send_custom_email` - Send custom email
 
-## OpenAI Agent Example
+## How to Choose the Right Server Mode
 
-Once your OpenAI agent has the `openai-api-spec.yaml` imported:
+**Use `npm run start:mcp`** (Port 3100) - **RECOMMENDED**
+- ✓ For OpenAI Agent Builder
+- ✓ Implements proper MCP protocol with HTTP/SSE transport
+- ✓ OpenAI can auto-discover all tools
+- ✓ Native MCP communication
 
-**User:** "Add a new customer Jane Smith with email jane@example.com who has a login issue marked as urgent"
+**Use `npm start`** (stdio)
+- ✓ For Claude Desktop
+- ✓ Uses stdio transport
+- ✓ Add to claude_desktop_config.json
 
-**Agent will call:**
-```
-POST /api/servers/sheets/tools/add_customer_record
-{
-  "name": "Jane Smith",
-  "email": "jane@example.com",
-  "issue": "login issue",
-  "status": "open",
-  "priority": "urgent"
-}
-```
+**Use `npm run start:api`** (Port 3000) - **DEPRECATED**
+- ✗ REST API wrapper (not true MCP protocol)
+- ✗ Does NOT work with OpenAI Agent Builder
+- ✗ Legacy compatibility only
 
 ## API Authentication
 
