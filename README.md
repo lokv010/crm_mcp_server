@@ -11,6 +11,14 @@ A Model Context Protocol (MCP) server for customer relationship management with 
 - **Email Notifications**: Send appointment confirmations and reminders via SendGrid
 - **REST API**: HTTP endpoints for OpenAI agents and other API clients
 
+## 🚨 Using with OpenAI Agent Builder?
+
+**Important:** OpenAI Agent Builder is cloud-based and cannot connect to `localhost`. You must either:
+1. **Use ngrok** to expose your local server (recommended for testing)
+2. **Deploy to cloud** (recommended for production)
+
+📖 **See [OPENAI_SETUP.md](./OPENAI_SETUP.md) for complete setup instructions**
+
 ## Quick Start
 
 ### 1. Install Dependencies

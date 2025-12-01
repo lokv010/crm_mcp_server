@@ -76,11 +76,33 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 /**
  * GET /health - Health check endpoint
  */
-app.get('/health', (req: Request, res: Response) => {
+app.get('/health', async (req: Request, res: Response) => {
+  const availableServers = mcpBridge.getAvailableServers();
+  const serverDetails: any = {};
+
+  // Get detailed status for each server
+  for (const serverName of availableServers) {
+    const info = await mcpBridge.getServerInfo(serverName);
+    if (info) {
+      serverDetails[serverName] = {
+        name: info.name,
+        description: info.description,
+        toolCount: info.tools.length,
+        status: 'initialized',
+      };
+    }
+  }
+
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    servers: mcpBridge.getAvailableServers(),
+    servers: availableServers,
+    serverDetails,
+    configuration: {
+      port: PORT,
+      authEnabled: !!API_KEY,
+      totalServers: availableServers.length,
+    },
   });
 });
 
@@ -178,17 +200,33 @@ app.get('/api/servers/:server/tools', async (req: Request, res: Response) => {
  */
 app.get('/api/tools', async (req: Request, res: Response) => {
   try {
+    console.log('[/api/tools] Fetching all tools from MCP servers...');
+    const availableServers = mcpBridge.getAvailableServers();
+    console.log(`[/api/tools] Available servers: ${availableServers.join(', ') || 'none'}`);
+
     const allTools = await mcpBridge.getAllTools();
+    const toolCount = Object.values(allTools).reduce((sum, tools) => sum + tools.length, 0);
+
+    console.log(`[/api/tools] Successfully retrieved ${toolCount} tools from ${Object.keys(allTools).length} servers`);
 
     res.json({
       success: true,
       tools: allTools,
+      _meta: {
+        serverCount: Object.keys(allTools).length,
+        totalTools: toolCount,
+        timestamp: new Date().toISOString(),
+      },
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[/api/tools] Error:', errorMessage);
+    console.error('[/api/tools] Stack:', error instanceof Error ? error.stack : 'N/A');
+
     res.status(500).json({
       success: false,
       error: errorMessage,
+      details: 'Check server logs for more information',
     });
   }
 });
