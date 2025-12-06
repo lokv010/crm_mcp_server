@@ -1,15 +1,25 @@
 #!/usr/bin/env node
 
 /**
- * MCP Server with HTTP/SSE Transport
+ * MCP Server with Streamable HTTP Transport
  *
- * This is a proper MCP server that implements the Model Context Protocol.
- * It uses StreamableHTTPServerTransport to work with clients like OpenAI Agent Builder.
+ * This MCP server implements the Model Context Protocol specification (2025-03-26)
+ * using the Streamable HTTP transport pattern recommended for remote servers.
+ *
+ * Key features:
+ * - Single /mcp endpoint supporting both POST (JSON-RPC) and GET (SSE) requests
+ * - Session management via Mcp-Session-Id header
+ * - Origin and Accept header validation for security and compliance
+ * - Compatible with OpenAI Agent Builder and ChatGPT Apps
  *
  * The server aggregates tools from:
- * - Google Sheets CRM
- * - Calendly appointments
- * - SendGrid email notifications
+ * - Google Sheets CRM: Customer record management
+ * - Calendly: Appointment scheduling and management
+ * - SendGrid: Email notifications (confirmations, reminders, custom emails)
+ *
+ * References:
+ * - MCP Streamable HTTP spec: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
+ * - OpenAI MCP guide: https://developers.openai.com/apps-sdk/build/mcp-server/
  */
 
 import express from 'express';
@@ -889,7 +899,7 @@ app.use(cors({
   origin: '*',
   credentials: true,
   exposedHeaders: ['Mcp-Session-Id'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Mcp-Session-Id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Mcp-Session-Id', 'Accept', 'Origin'],
 }));
 
 // Create a single MCP server instance at startup
@@ -898,6 +908,25 @@ const mcpServer = createMCPServer();
 // Simple map to track active transports by session ID
 // The SDK manages session lifecycle via callbacks
 const activeTransports = new Map<string, StreamableHTTPServerTransport>();
+
+/**
+ * Validate Origin header to prevent DNS rebinding attacks
+ * Per MCP spec: Servers should validate the Origin header
+ */
+function validateOrigin(req: express.Request): boolean {
+  const origin = req.headers.origin;
+  // For localhost servers, allow localhost and 127.0.0.1
+  // In production, you should validate against your allowed domains
+  if (!origin) return true; // No origin header is acceptable for same-origin requests
+
+  try {
+    const originUrl = new URL(origin);
+    const allowedHosts = ['localhost', '127.0.0.1', 'openai.com'];
+    return allowedHosts.some(host => originUrl.hostname === host || originUrl.hostname.endsWith(`.${host}`));
+  } catch {
+    return false;
+  }
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -912,35 +941,88 @@ app.get('/health', (req, res) => {
   });
 });
 
-// MCP endpoint - POST requests for JSON-RPC messages
-app.post('/mcp', async (req, res) => {
+/**
+ * MCP endpoint - Single endpoint for both POST and GET requests
+ * POST: Client sends JSON-RPC messages
+ * GET: Client opens SSE stream for server-initiated communication
+ *
+ * Per MCP Streamable HTTP spec (2025-03-26):
+ * - Must support both POST and GET on the same endpoint
+ * - POST requires Accept header with application/json and/or text/event-stream
+ * - Session ID should be validated if required
+ */
+app.all('/mcp', async (req, res) => {
   try {
+    // Validate Origin header for security
+    if (!validateOrigin(req)) {
+      console.warn(`Invalid origin: ${req.headers.origin}`);
+      res.status(403).send('Forbidden: Invalid origin');
+      return;
+    }
+
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     let transport: StreamableHTTPServerTransport;
 
-    if (sessionId && activeTransports.has(sessionId)) {
-      // Reuse existing transport for this session
-      transport = activeTransports.get(sessionId)!;
-    } else {
-      // Create new transport - SDK will handle session lifecycle via callbacks
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (sid: string) => {
-          activeTransports.set(sid, transport);
-          console.log(`Session ${sid} initialized`);
-        },
-        onsessionclosed: (sid: string) => {
-          activeTransports.delete(sid);
-          console.log(`Session ${sid} closed`);
-        },
-      });
+    // Handle GET request (SSE stream)
+    if (req.method === 'GET') {
+      // For GET requests, session must already exist
+      if (!sessionId || !activeTransports.has(sessionId)) {
+        res.status(400).send('Bad Request: Session not found. Initialize session first via POST /mcp');
+        return;
+      }
 
-      // Connect transport to the MCP server
-      await mcpServer.connect(transport);
+      transport = activeTransports.get(sessionId)!;
+      await transport.handleRequest(req, res);
+      return;
     }
 
-    // Handle the request
-    await transport.handleRequest(req, res, req.body);
+    // Handle POST request (JSON-RPC messages)
+    if (req.method === 'POST') {
+      // Validate Accept header per MCP spec
+      const acceptHeader = req.headers.accept || '';
+      const hasValidAccept = acceptHeader.includes('application/json') || acceptHeader.includes('text/event-stream');
+
+      if (!hasValidAccept) {
+        console.warn(`Invalid Accept header: ${acceptHeader}`);
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32600,
+            message: 'Bad Request: Accept header must include application/json or text/event-stream',
+          },
+          id: null,
+        });
+        return;
+      }
+
+      if (sessionId && activeTransports.has(sessionId)) {
+        // Reuse existing transport for this session
+        transport = activeTransports.get(sessionId)!;
+      } else {
+        // Create new transport - SDK will handle session lifecycle via callbacks
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sid: string) => {
+            activeTransports.set(sid, transport);
+            console.log(`✓ Session ${sid} initialized`);
+          },
+          onsessionclosed: (sid: string) => {
+            activeTransports.delete(sid);
+            console.log(`✓ Session ${sid} closed`);
+          },
+        });
+
+        // Connect transport to the MCP server
+        await mcpServer.connect(transport);
+      }
+
+      // Handle the request
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
+
+    // Method not allowed
+    res.status(405).send('Method Not Allowed');
   } catch (error) {
     console.error('Error handling MCP request:', error);
     if (!res.headersSent) {
@@ -956,33 +1038,15 @@ app.post('/mcp', async (req, res) => {
   }
 });
 
-// SSE endpoint - GET /messages for Server-Sent Events stream
-app.get('/messages', async (req, res) => {
-  try {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
-    if (!sessionId || !activeTransports.has(sessionId)) {
-      res.status(400).send('Session not found. Initialize session first via POST /mcp');
-      return;
-    }
-
-    const transport = activeTransports.get(sessionId)!;
-    await transport.handleRequest(req, res);
-  } catch (error) {
-    console.error('Error handling SSE request:', error);
-    if (!res.headersSent) {
-      res.status(500).send('Error establishing SSE connection');
-    }
-  }
-});
-
 // Start server
 app.listen(MCP_PORT, () => {
   console.log('\n========================================');
-  console.log('🚀 MCP Server (HTTP/SSE Transport)');
+  console.log('🚀 MCP Server (Streamable HTTP Transport)');
   console.log('========================================\n');
   console.log(`Server running on: http://localhost:${MCP_PORT}`);
   console.log(`MCP endpoint: http://localhost:${MCP_PORT}/mcp`);
+  console.log(`  - POST /mcp: Send JSON-RPC messages (initialize & communicate)`);
+  console.log(`  - GET /mcp: Open SSE stream (requires active session)`);
   console.log(`Health check: http://localhost:${MCP_PORT}/health\n`);
 
   console.log('Configured services:');
@@ -990,8 +1054,15 @@ app.listen(MCP_PORT, () => {
   console.log(`  Calendly: ${!!(CALENDLY_API_TOKEN && CALENDLY_ORGANIZATION_URI) ? '✓' : '✗'}`);
   console.log(`  SendGrid: ${!!(SENDGRID_API_KEY && SENDGRID_FROM_EMAIL) ? '✓' : '✗'}\n`);
 
-  console.log('For OpenAI Agent Builder:');
-  console.log(`  Use this MCP server URL: http://localhost:${MCP_PORT}/mcp\n`);
+  console.log('Transport: Streamable HTTP (MCP spec 2025-03-26)');
+  console.log('Features:');
+  console.log('  ✓ Single endpoint for POST & GET requests');
+  console.log('  ✓ Session management with Mcp-Session-Id header');
+  console.log('  ✓ Origin header validation for security');
+  console.log('  ✓ Accept header validation (application/json, text/event-stream)\n');
+
+  console.log('For OpenAI Agent Builder / ChatGPT Apps:');
+  console.log(`  MCP Server URL: http://localhost:${MCP_PORT}/mcp\n`);
   console.log('========================================\n');
 });
 
