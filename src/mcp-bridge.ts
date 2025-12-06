@@ -213,6 +213,8 @@ export class MCPBridge {
         return await server.getEventInvitee(args.inviteeUri);
       case 'cancel_event':
         return await server.cancelEvent(args.eventUri, args.reason);
+      case 'create_event':
+            return await server.createEvent(args as any);
       default:
         throw new Error(`Unknown tool: ${toolName}`);
     }

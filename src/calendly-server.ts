@@ -71,6 +71,8 @@ export class CalendlyMCPServer {
             return await this.checkAvailability((args as any).eventTypeUri as string, (args as any).startTime as string, (args as any).endTime as string);
           case 'book_appointment':
             return await this.bookAppointment(args as any);
+          case 'create_event':
+            return await this.createEvent(args as any);
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -90,6 +92,41 @@ export class CalendlyMCPServer {
 
   private getTools(): Tool[] {
     return [
+      // Add to getTools()
+        {
+          name: 'create_event',
+          description: 'Initiate appointment booking workflow. Creates scheduling link and provides automation instructions.',
+          inputSchema: {
+            type: 'object',
+          properties: {
+            eventTypeUri: {
+              type: 'string',
+              description: 'The Calendly event type URI',
+            },
+            customerName: {
+              type: 'string',
+              description: 'Customer full name',
+            },
+            customerEmail: {
+              type: 'string',
+              description: 'Customer email address',
+            },
+            customerPhone: {
+              type: 'string',
+              description: 'Customer phone number (optional)',
+            },
+            preferredDate: {
+              type: 'string',
+              description: 'Preferred date in ISO format (optional)',
+            },
+            notes: {
+              type: 'string',
+              description: 'Additional booking notes (optional)',
+            },
+          },
+          required: ['eventTypeUri', 'customerName', 'customerEmail'],
+        },
+      },
       {
         name: 'list_event_types',
         description: 'List all available Calendly event types for booking appointments',
@@ -516,4 +553,120 @@ export class CalendlyMCPServer {
     await this.server.connect(transport);
     console.error('Calendly MCP server running on stdio');
   }
+
+
+
+  // Add this method
+  private async createEvent(details: {
+    eventTypeUri: string;
+    customerName: string;
+    customerEmail: string;
+    customerPhone?: string;
+    preferredDate?: string;
+    notes?: string;
+  }) {
+    try {
+      // Step 1: Get event type details
+      const eventTypeData: any = await this.makeCalendlyRequest(
+        `/event_types/${details.eventTypeUri.split('/').pop()}`
+      );
+
+      // Step 2: Check availability if preferred date provided
+      let availableSlots = null;
+      if (details.preferredDate) {
+        const date = new Date(details.preferredDate);
+        const startTime = new Date(date.setHours(0, 0, 0, 0)).toISOString();
+        const endTime = new Date(date.setHours(23, 59, 59, 999)).toISOString();
+
+        try {
+          const availabilityData: any = await this.makeCalendlyRequest(
+            `/event_type_available_times?event_type=${encodeURIComponent(details.eventTypeUri)}&start_time=${encodeURIComponent(startTime)}&end_time=${encodeURIComponent(endTime)}`
+          );
+          
+          availableSlots = availabilityData.collection.slice(0, 5).map((slot: any) => ({
+            start_time: slot.start_time,
+            status: slot.status,
+          }));
+        } catch (error) {
+          console.error('Could not fetch availability:', error);
+        }
+      }
+
+      // Step 3: Create one-time scheduling link
+      const linkResponse = await this.makeCalendlyRequest('/scheduling_links', {
+        method: 'POST',
+        body: JSON.stringify({
+          max_event_count: 1,
+          owner: details.eventTypeUri,
+          owner_type: 'EventType',
+        }),
+      });
+
+      const schedulingUrl = linkResponse.resource.booking_url;
+
+      // Step 4: Build pre-filled URL
+      const params = new URLSearchParams();
+      params.append('name', details.customerName);
+      params.append('email', details.customerEmail);
+      
+      if (details.customerPhone) {
+        params.append('a1', details.customerPhone);
+      }
+      
+      if (details.notes) {
+        params.append('a2', details.notes);
+      }
+
+      const prefilledUrl = `${schedulingUrl}?${params.toString()}`;
+
+      // Step 5: Build comprehensive response
+      const response = {
+        success: true,
+        message: 'Appointment booking initiated',
+        event_type: {
+          name: eventTypeData.resource.name,
+          duration: eventTypeData.resource.duration,
+          description: eventTypeData.resource.description_plain,
+        },
+        customer: {
+          name: details.customerName,
+          email: details.customerEmail,
+          phone: details.customerPhone || 'Not provided',
+        },
+        booking_url: prefilledUrl,
+        scheduling_url_expires: 'After 1 booking',
+        ...(availableSlots && {
+          available_slots_on_preferred_date: availableSlots,
+          preferred_date: details.preferredDate,
+        }),
+        workflow: {
+          step: 1,
+          status: 'awaiting_customer_confirmation',
+          next_steps: [
+            'Send booking link to customer via email or SMS',
+            'Customer selects available time slot',
+            'Customer confirms booking',
+            'System sends confirmation emails',
+            'Event appears in both calendars',
+          ],
+        },
+        automation_options: {
+          email_template: `Hi ${details.customerName},\n\nThank you for booking with us! Please click the link below to select your preferred appointment time:\n\n${prefilledUrl}\n\nBest regards`,
+          sms_template: `Hi ${details.customerName}, book your appointment here: ${prefilledUrl}`,
+        },
+      };
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(response, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      throw new Error(`Failed to create event: ${error}`);
+    }
+}
+ 
 }
