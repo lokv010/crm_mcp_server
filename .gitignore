@@ -148,3 +148,5 @@ vite.config.ts.timestamp-*
 .env.local
 .env
 .DS_Store
+
+google_cred
