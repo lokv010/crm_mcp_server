@@ -54,7 +54,21 @@ const SENDGRID_FROM_NAME = process.env.SENDGRID_FROM_NAME || 'CRM Support';
 
 // Google Sheets configuration
 const SHEET_NAME = 'CustomerRecords';
-const HEADERS = ['ID', 'Name', 'Email', 'Phone', 'Issue', 'Status', 'Priority', 'Created At', 'Updated At', 'Notes'];
+const HEADERS = [
+  'ID',
+  'Make',
+  'Model',
+  'KM',
+  'Name',
+  'Email',
+  'Phone',
+  'Issue',
+  'Status',
+  'Priority',
+  'Created At',
+  'Updated At',
+  'Notes',
+];
 
 // Initialize Google Sheets API client (if configured)
 let sheetsClient: any = null;
@@ -452,10 +466,23 @@ async function handleSheetsTool(toolName: string, args: any): Promise<any> {
   }
 }
 
+// helper to convert 1-based column index to letter (1 -> A, 27 -> AA)
+function columnLetter(n: number): string {
+  let s = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    s = String.fromCharCode(65 + rem) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
 async function initializeSheet(): Promise<any> {
+  const endCol = columnLetter(HEADERS.length);
+  const range = `${SHEET_NAME}!A1:${endCol}1`;
   const result = await sheetsClient.spreadsheets.values.update({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A1:J1`,
+    range,
     valueInputOption: 'RAW',
     requestBody: {
       values: [HEADERS],
@@ -1241,7 +1268,9 @@ app.all('/mcp', async (req, res) => {
         return;
       }
 
-
+      // If OpenAI asks for tools/list directly (common during onboarding),
+      // respond immediately from Express so the control plane gets the tool list
+      // even if a session wasn't created by initialize.
       if (req.body && req.body.method === 'tools/list') {
         const rpcId = req.body.id ?? null;
         console.log('[MCP] tools/list received at Express layer — returning tools directly');
