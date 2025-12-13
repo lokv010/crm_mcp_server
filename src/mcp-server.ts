@@ -137,7 +137,7 @@ function createMCPServer(): Server {
       // Route to appropriate tool handler
       if (name.startsWith('sheets_') || ['initialize_sheet', 'add_customer_record', 'get_customer_record', 'update_customer_record', 'search_customer_records', 'list_all_customers', 'check_customer_history'].includes(name)) {
         return await handleSheetsTool(name, args);
-      } else if (name.startsWith('calendly_') || ['list_event_types', 'get_event_type', 'get_scheduling_link', 'list_scheduled_events', 'get_event_invitee', 'cancel_event','create_event'].includes(name)) {
+      } else if (name.startsWith('calendly_') || ['list_event_types', 'get_event_type', 'get_scheduling_link', 'list_scheduled_events', 'get_event_invitee', 'cancel_event','create_event','event_type_available_times'].includes(name)) {
         return await handleCalendlyTool(name, args);
       } else if (name.startsWith('email_') || ['send_appointment_confirmation', 'send_appointment_reminder', 'send_custom_email'].includes(name)) {
         return await handleEmailTool(name, args);
@@ -186,6 +186,9 @@ function getAllTools(): Tool[] {
         inputSchema: {
           type: 'object',
           properties: {
+            make: { type: 'string', description: 'Vehicle make (e.g., Toyota)' },
+            model: { type: 'string', description: 'Vehicle model (e.g., Corolla)' },
+            km: { type: 'string', description: 'Vehicle kilometers (e.g., 12345)' },
             name: { type: 'string', description: 'Customer name' },
             email: { type: 'string', description: 'Customer email address' },
             phone: { type: 'string', description: 'Customer phone number (optional)' },
@@ -328,6 +331,18 @@ function getAllTools(): Tool[] {
               type: 'string',
               description: 'The Calendly event type URI',
             },
+          },
+          required: ['eventTypeUri'],
+        },
+      },
+      {
+        name: 'event_type_available_times',
+        description: 'Return available time slots for the given event type for the week containing the reference date (or this week).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            eventTypeUri: { type: 'string', description: 'The Calendly event type URI' },
+            referenceDate: { type: 'string', description: 'ISO date used to determine the week (optional). Defaults to today.' },
           },
           required: ['eventTypeUri'],
         },
@@ -503,8 +518,13 @@ async function addCustomerRecord(record: CustomerRecord): Promise<any> {
   const id = randomUUID();
   const timestamp = new Date().toISOString();
 
+  // Row layout matches HEADERS:
+  // [ ID, Make, Model, KM, Name, Email, Phone, Issue, Status, Priority, Created At, Updated At, Notes ]
   const row = [
     id,
+    record.make || '',
+    record.model || '',
+    record.km || '',
     record.name,
     record.email,
     record.phone || '',
@@ -516,9 +536,10 @@ async function addCustomerRecord(record: CustomerRecord): Promise<any> {
     record.notes || '',
   ];
 
+  const endCol = columnLetter(HEADERS.length);
   await sheetsClient.spreadsheets.values.append({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:J`,
+    range: `${SHEET_NAME}!A1:${endCol}`,
     valueInputOption: 'RAW',
     requestBody: {
       values: [row],
@@ -632,31 +653,37 @@ async function updateCustomerRecord(update: any): Promise<any> {
 }
 
 async function searchCustomerRecords(criteria: any): Promise<any> {
+  const endCol = columnLetter(HEADERS.length);
   const result = await sheetsClient.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:J`,
+    range: `${SHEET_NAME}!A1:${endCol}`,
   });
 
   const rows = result.data.values || [];
   const matchingRecords = rows.slice(1).filter((row: any[]) => {
-    if (criteria.email && row[2] !== criteria.email) return false;
-    if (criteria.name && !row[1].toLowerCase().includes(criteria.name.toLowerCase())) return false;
-    if (criteria.status && row[5] !== criteria.status) return false;
-    if (criteria.priority && row[6] !== criteria.priority) return false;
+    // HEADERS indexes (0-based):
+    // 0: ID, 1: Make, 2: Model, 3: KM, 4: Name, 5: Email, 6: Phone, 7: Issue, 8: Status, 9: Priority, 10: Created At, 11: Updated At, 12: Notes
+    if (criteria.email && row[5] !== criteria.email) return false; // Email at index 5
+    if (criteria.name && !(row[4] || '').toLowerCase().includes(criteria.name.toLowerCase())) return false; // Name at index 4
+    if (criteria.status && row[8] !== criteria.status) return false; // Status at index 8
+    if (criteria.priority && row[9] !== criteria.priority) return false; // Priority at index 9
     return true;
   });
 
   const records = matchingRecords.map((row: any[]) => ({
     id: row[0],
-    name: row[1],
-    email: row[2],
-    phone: row[3],
-    issue: row[4],
-    status: row[5],
-    priority: row[6],
-    createdAt: row[7],
-    updatedAt: row[8],
-    notes: row[9],
+    make: row[1],
+    model: row[2],
+    km: row[3],
+    name: row[4],
+    email: row[5],
+    phone: row[6],
+    issue: row[7],
+    status: row[8],
+    priority: row[9],
+    createdAt: row[10],
+    updatedAt: row[11],
+    notes: row[12],
   }));
 
   return {
@@ -747,6 +774,8 @@ async function handleCalendlyTool(toolName: string, args: any): Promise<any> {
       return await getEventType(args.eventTypeUri);
     case 'get_scheduling_link':
       return await getSchedulingLink(args.eventTypeUri);
+    case 'event_type_available_times':
+      return await calendlyEventTypeAvailableTimes(args);
     case 'list_scheduled_events':
       return await listScheduledEvents(args);
     case 'get_event_invitee':
@@ -864,6 +893,86 @@ async function cancelEvent(eventUri: string, reason?: string): Promise<any> {
     ],
   };
 }
+
+
+
+/**
+ * Return available times for an event type for the week containing referenceDate (or this week).
+ * Args: { eventTypeUri: string, referenceDate?: string }
+ */
+async function calendlyEventTypeAvailableTimes(args: { eventTypeUri: string; referenceDate?: string; }): Promise<any> {
+  const { eventTypeUri, referenceDate } = args || {};
+  if (!eventTypeUri) throw new Error('eventTypeUri is required');
+
+  // compute week start (Monday) and end (Sunday) in ISO 8601
+  const ref = referenceDate ? new Date(referenceDate) : new Date();
+  if (Number.isNaN(ref.getTime())) throw new Error('referenceDate is not a valid date');
+
+  // get Monday of the week (ISO week starting Monday)
+  const day = ref.getUTCDay(); // 0 (Sun) .. 6 (Sat)
+  const diffToMonday = ((day + 6) % 7); // 0 -> Monday, 6 -> Sunday
+  const monday = new Date(Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), ref.getUTCDate()));
+  monday.setUTCDate(monday.getUTCDate() - diffToMonday);
+  monday.setUTCHours(0, 0, 0, 0);
+
+  // Sunday end of day
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  sunday.setUTCHours(23, 59, 59, 999);
+
+  const startTime = monday.toISOString();
+  const endTime = sunday.toISOString();
+
+  // Call Calendly API for available times in the week
+  const params = new URLSearchParams();
+  params.append('event_type', eventTypeUri);
+  params.append('start_time', startTime);
+  params.append('end_time', endTime);
+
+  const path = `/event_type_available_times?${params.toString()}`;
+  const data = await calendlyRequest(path);
+
+  // data.collection is expected to be an array of available slot objects
+  const slots = Array.isArray(data?.collection) ? data.collection : [];
+
+  // Group slots by date (YYYY-MM-DD) for the week
+  const availabilityByDay: Record<string, any[]> = {};
+  for (let d = new Date(monday); d <= sunday; d.setUTCDate(d.getUTCDate() + 1)) {
+    const key = d.toISOString().slice(0, 10);
+    availabilityByDay[key] = [];
+  }
+
+  slots.forEach((slot: any) => {
+    const start = slot.start_time || slot.starts_at || slot.start;
+    if (!start) return;
+    const dateKey = (new Date(start)).toISOString().slice(0, 10);
+    if (!availabilityByDay[dateKey]) availabilityByDay[dateKey] = [];
+    availabilityByDay[dateKey].push({
+      start_time: slot.start_time ?? slot.starts_at ?? slot.start,
+      end_time: slot.end_time ?? slot.ends_at ?? slot.end,
+      status: slot.status,
+      invitees_remaining: slot.invitees_remaining,
+      // include original slot object for detail
+      raw: slot,
+    });
+  });
+
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          eventTypeUri,
+          weekStart: startTime,
+          weekEnd: endTime,
+          availabilityByDay,
+        }, null, 2),
+      },
+    ],
+  };
+}
+
+//
 
 // Add this after cancelEvent() function
 async function createEvent(details: {

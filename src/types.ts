@@ -9,6 +9,9 @@ export interface CustomerRecord {
   createdAt?: string;
   updatedAt?: string;
   notes?: string;
+  make?: string;
+  model?: string;
+  km?: number;
 }
 
 export interface AppointmentDetails {
