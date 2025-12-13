@@ -974,22 +974,72 @@ async function calendlyEventTypeAvailableTimes(args: { eventTypeUri: string; ref
 
 //
 
-// Add this after cancelEvent() function
 async function createEvent(details: {
   eventTypeUri: string;
   customerName: string;
   customerEmail: string;
   customerPhone?: string;
-  preferredDate?: string;
+  preferredDate?: string; // "2025-12-15T10:00:00Z"
   notes?: string;
 }): Promise<any> {
   try {
-    // Step 1: Get event type details
     const eventTypeId = details.eventTypeUri.split('/').pop();
     const eventTypeData = await calendlyRequest(`/event_types/${eventTypeId}`);
     const eventType = eventTypeData.resource;
 
-    // Step 2: Check availability if preferred date provided
+    // Step 1: Create single-use scheduling link
+    const linkPayload: any = {
+      max_event_count: 1,
+      owner: details.eventTypeUri,
+      owner_type: 'EventType',
+    };
+
+    // **NEW: Add date constraints if preferredDate provided**
+    if (details.preferredDate) {
+      const preferredDateTime = new Date(details.preferredDate);
+      
+      // Set date_setting to constrain to specific date
+      linkPayload.date_setting = {
+        type: 'date_range',
+        start_date: preferredDateTime.toISOString().split('T')[0], // "2025-12-15"
+        end_date: preferredDateTime.toISOString().split('T')[0],   // Same day
+      };
+    }
+
+    const linkResponse = await calendlyRequest('/scheduling_links', {
+      method: 'POST',
+      body: JSON.stringify(linkPayload),
+    });
+
+    const schedulingUrl = linkResponse.resource.booking_url;
+
+    // Step 2: Build pre-filled URL with customer information
+    const params = new URLSearchParams();
+    params.append('name', details.customerName);
+    params.append('email', details.customerEmail);
+
+    if (details.customerPhone) {
+      params.append('a1', details.customerPhone);
+    }
+
+    if (details.notes) {
+      params.append('a2', details.notes);
+    }
+
+    // **NEW: Add date/time to URL if provided**
+    if (details.preferredDate) {
+      const preferredDateTime = new Date(details.preferredDate);
+      // Format: YYYY-MM-DD
+      params.append('date', preferredDateTime.toISOString().split('T')[0]);
+      // Format: HH:MM (24-hour)
+      const hours = preferredDateTime.getUTCHours().toString().padStart(2, '0');
+      const minutes = preferredDateTime.getUTCMinutes().toString().padStart(2, '0');
+      params.append('time', `${hours}:${minutes}`);
+    }
+
+    const prefilledUrl = `${schedulingUrl}?${params.toString()}`;
+
+    // Step 3: Check availability if date provided
     let availabilityInfo = null;
     if (details.preferredDate) {
       try {
@@ -997,74 +1047,65 @@ async function createEvent(details: {
         const startTime = new Date(date.setHours(0, 0, 0, 0)).toISOString();
         const endTime = new Date(date.setHours(23, 59, 59, 999)).toISOString();
 
+        const availabilityParams = new URLSearchParams();
+        availabilityParams.append('event_type', details.eventTypeUri);
+        availabilityParams.append('start_time', startTime);
+        availabilityParams.append('end_time', endTime);
+
         const availabilityData = await calendlyRequest(
-          `/event_type_available_times?event_type=${encodeURIComponent(details.eventTypeUri)}&start_time=${encodeURIComponent(startTime)}&end_time=${encodeURIComponent(endTime)}`
+          `/event_type_available_times?${availabilityParams.toString()}`
         );
 
         if (availabilityData.collection && availabilityData.collection.length > 0) {
+          // Check if the exact time slot is available
+          const exactSlot = availabilityData.collection.find((slot: any) => {
+            const slotStart = new Date(slot.start_time || slot.starts_at);
+            return slotStart.getTime() === new Date(details.preferredDate!).getTime();
+          });
+
           availabilityInfo = {
-            date: details.preferredDate,
-            slots_available: availabilityData.collection.length,
-            first_available_slots: availabilityData.collection.slice(0, 5).map((slot: any) => ({
-              start_time: slot.start_time,
+            requested_time: details.preferredDate,
+            exact_slot_available: !!exactSlot,
+            total_slots_on_date: availabilityData.collection.length,
+            nearest_slots: availabilityData.collection.slice(0, 3).map((slot: any) => ({
+              start_time: slot.start_time || slot.starts_at,
               status: slot.status,
               invitees_remaining: slot.invitees_remaining,
             })),
           };
         } else {
           availabilityInfo = {
-            date: details.preferredDate,
-            slots_available: 0,
-            message: 'No availability on preferred date',
+            requested_time: details.preferredDate,
+            exact_slot_available: false,
+            total_slots_on_date: 0,
+            message: 'No availability on requested date',
           };
         }
       } catch (error) {
         console.error('Could not fetch availability:', error);
         availabilityInfo = {
-          date: details.preferredDate,
+          requested_time: details.preferredDate,
           error: 'Could not check availability',
         };
       }
     }
 
-    // Step 3: Create one-time scheduling link
-    const linkResponse = await calendlyRequest('/scheduling_links', {
-      method: 'POST',
-      body: JSON.stringify({
-        max_event_count: 1,
-        owner: details.eventTypeUri,
-        owner_type: 'EventType',
-      }),
-    });
-
-    const schedulingUrl = linkResponse.resource.booking_url;
-
-    // Step 4: Build pre-filled URL with customer information
-    const params = new URLSearchParams();
-    params.append('name', details.customerName);
-    params.append('email', details.customerEmail);
-
-    if (details.customerPhone) {
-      params.append('a1', details.customerPhone); // a1 is typically the phone field
-    }
-
-    if (details.notes) {
-      params.append('a2', details.notes); // a2 for additional notes
-    }
-
-    const prefilledUrl = `${schedulingUrl}?${params.toString()}`;
-
-    // Step 5: Build comprehensive response
-    const response = {
+    // Step 4: Build comprehensive response
+    const response: any = {
       success: true,
-      message: 'Appointment booking initiated successfully',
+      message: details.preferredDate 
+        ? 'Scheduling link created with preferred date/time pre-selected'
+        : 'Scheduling link generated - customer can select any available time',
       booking_url: prefilledUrl,
       booking_url_short: schedulingUrl,
       expires_after: '1 booking',
+      owner_uri: linkResponse.resource.owner,
+      created_at: linkResponse.resource.created_at,
       event_details: {
         name: eventType.name,
         duration: `${eventType.duration} minutes`,
         description: eventType.description_plain || 'No description',
+        type: eventType.type,
         scheduling_url: eventType.scheduling_url,
       },
       customer: {
@@ -1073,22 +1114,58 @@ async function createEvent(details: {
         phone: details.customerPhone || 'Not provided',
         notes: details.notes || 'None',
       },
-      ...(availabilityInfo && { availability: availabilityInfo }),
-      workflow: {
-        current_step: 'Link generated',
-        status: 'Awaiting customer confirmation',
-        next_steps: [
-          '1. Send booking link to customer via email or SMS',
-          '2. Customer clicks link and views available time slots',
-          '3. Customer selects preferred time',
-          '4. Customer confirms booking',
-          '5. Both parties receive confirmation emails',
-          '6. Event added to calendars',
-        ],
-      },
-      email_template: `Hi ${details.customerName},\n\nThank you for choosing our service! Please use the link below to schedule your appointment:\n\n${prefilledUrl}\n\nYou can select a time that works best for you from the available slots.\n\nBest regards,\nThe Team`,
-      sms_template: `Hi ${details.customerName}, schedule your appointment here: ${prefilledUrl}`,
     };
+
+    // Add preferred date info if provided
+    if (details.preferredDate) {
+      response.preferred_datetime = {
+        requested: details.preferredDate,
+        date: new Date(details.preferredDate).toISOString().split('T')[0],
+        time: new Date(details.preferredDate).toISOString().split('T')[1].substring(0, 5),
+        timezone: 'UTC',
+      };
+      response.link_constraints = {
+        type: 'date_range',
+        limited_to_date: new Date(details.preferredDate).toISOString().split('T')[0],
+      };
+    }
+
+    // Add availability check results
+    if (availabilityInfo) {
+      response.availability = availabilityInfo;
+    }
+
+    response.workflow = details.preferredDate ? {
+      current_step: 'Link generated with pre-selected date/time',
+      status: 'Awaiting customer confirmation',
+      next_steps: [
+        '1. Send booking link to customer',
+        '2. Customer reviews pre-selected date/time',
+        '3. Customer confirms or selects alternative time',
+        '4. Booking confirmed automatically',
+        '5. Both parties receive confirmation',
+      ],
+      note: availabilityInfo?.exact_slot_available 
+        ? 'Requested time slot is available'
+        : 'Requested time may not be available - customer will see available alternatives',
+    } : {
+      current_step: 'Link generated',
+      status: 'Awaiting customer to select time',
+      next_steps: [
+        '1. Send booking link to customer',
+        '2. Customer selects preferred time',
+        '3. Customer confirms booking',
+        '4. Both parties receive confirmation',
+      ],
+    };
+
+    response.email_template = details.preferredDate
+      ? `Hi ${details.customerName},\n\nThank you for choosing our service! We've prepared a booking link with your preferred date and time pre-selected:\n\nDate: ${new Date(details.preferredDate).toLocaleDateString()}\nTime: ${new Date(details.preferredDate).toLocaleTimeString()}\n\nBook here: ${prefilledUrl}\n\n${availabilityInfo?.exact_slot_available ? 'Your preferred time is available!' : 'Please review and select from available times if your preferred slot is not available.'}\n\nBest regards,\nThe Team`
+      : `Hi ${details.customerName},\n\nThank you for choosing our service! Please use the link below to schedule your appointment:\n\n${prefilledUrl}\n\nYou can select a time that works best for you from the available slots.\n\nBest regards,\nThe Team`;
+
+    response.sms_template = details.preferredDate
+      ? `Hi ${details.customerName}, your appointment link (${new Date(details.preferredDate).toLocaleDateString()} ${new Date(details.preferredDate).toLocaleTimeString()}): ${prefilledUrl}`
+      : `Hi ${details.customerName}, schedule your appointment here: ${prefilledUrl}`;
 
     return {
       content: [
@@ -1103,7 +1180,6 @@ async function createEvent(details: {
     throw new Error(`Failed to create event: ${errorMessage}`);
   }
 }
-
 
 // =============================================================================
 // Email Tool Handlers
