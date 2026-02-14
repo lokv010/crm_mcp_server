@@ -137,7 +137,7 @@ function createMCPServer(): Server {
       // Route to appropriate tool handler
       if (name.startsWith('sheets_') || ['initialize_sheet', 'add_customer_record', 'get_customer_record', 'update_customer_record', 'search_customer_records', 'list_all_customers', 'check_customer_history', 'get_service_pricing'].includes(name)) {
         return await handleSheetsTool(name, args);
-      } else if (name.startsWith('calendly_') || ['list_event_types', 'get_event_type', 'get_scheduling_link', 'list_scheduled_events', 'get_event_invitee', 'cancel_event','create_event','event_type_available_times','create_appointment'].includes(name)) {
+      } else if (name.startsWith('calendly_') || ['list_event_types', 'get_event_type', 'get_scheduling_link', 'list_scheduled_events', 'get_event_invitee', 'cancel_event','create_event','event_type_available_times','create_appointment','check_availability','book_appointment'].includes(name)) {
         return await handleCalendlyTool(name, args);
       } else if (name.startsWith('email_') || ['send_appointment_confirmation', 'send_appointment_reminder', 'send_custom_email'].includes(name)) {
         return await handleEmailTool(name, args);
@@ -367,10 +367,15 @@ function getAllTools(): Tool[] {
       },
       {
         name: 'list_scheduled_events',
-        description: 'List scheduled events within a date range',
+        description: 'List scheduled events, optionally filtered by status or date range',
         inputSchema: {
           type: 'object',
           properties: {
+            status: {
+              type: 'string',
+              enum: ['active', 'canceled'],
+              description: 'Filter events by status',
+            },
             minStartTime: {
               type: 'string',
               description: 'Minimum start time (ISO 8601 format)',
@@ -412,6 +417,54 @@ function getAllTools(): Tool[] {
             },
           },
           required: ['eventUri'],
+        },
+      },
+      {
+        name: 'check_availability',
+        description: 'Check available appointment slots for a specific event type within a date range',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            eventTypeUri: {
+              type: 'string',
+              description: 'The URI of the event type to check availability for',
+            },
+            startTime: {
+              type: 'string',
+              description: 'Start time for availability search (ISO 8601 format, e.g., 2024-01-15T00:00:00Z)',
+            },
+            endTime: {
+              type: 'string',
+              description: 'End time for availability search (ISO 8601 format, e.g., 2024-01-22T23:59:59Z)',
+            },
+          },
+          required: ['eventTypeUri', 'startTime', 'endTime'],
+        },
+      },
+      {
+        name: 'book_appointment',
+        description: 'Generate a pre-filled scheduling link for booking an appointment with customer information',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            eventTypeUri: {
+              type: 'string',
+              description: 'The URI of the event type to book',
+            },
+            name: {
+              type: 'string',
+              description: 'Customer name',
+            },
+            email: {
+              type: 'string',
+              description: 'Customer email address',
+            },
+            phone: {
+              type: 'string',
+              description: 'Customer phone number (optional)',
+            },
+          },
+          required: ['eventTypeUri', 'name', 'email'],
         },
       },
       {
@@ -881,6 +934,10 @@ async function handleCalendlyTool(toolName: string, args: any): Promise<any> {
       return await getEventInvitee(args.inviteeUri);
     case 'cancel_event':
       return await cancelEvent(args.eventUri, args.reason);
+    case 'check_availability':
+      return await checkAvailability(args.eventTypeUri, args.startTime, args.endTime);
+    case 'book_appointment':
+      return await bookAppointment(args);
     case 'create_event':
     case 'create_appointment':
       return await createEvent(args);
@@ -948,6 +1005,9 @@ async function getSchedulingLink(eventTypeUri: string): Promise<any> {
 
 async function listScheduledEvents(params: any): Promise<any> {
   let queryParams = `organization=${encodeURIComponent(CALENDLY_ORGANIZATION_URI!)}`;
+  if (params.status) {
+    queryParams += `&status=${encodeURIComponent(params.status)}`;
+  }
   if (params.minStartTime) {
     queryParams += `&min_start_time=${encodeURIComponent(params.minStartTime)}`;
   }
@@ -956,11 +1016,23 @@ async function listScheduledEvents(params: any): Promise<any> {
   }
 
   const data = await calendlyRequest(`/scheduled_events?${queryParams}`);
+
+  const events = data.collection.map((event: any) => ({
+    uri: event.uri,
+    name: event.name,
+    status: event.status,
+    start_time: event.start_time,
+    end_time: event.end_time,
+    event_type: event.event_type,
+    location: event.location,
+    invitees_counter: event.invitees_counter,
+  }));
+
   return {
     content: [
       {
         type: 'text',
-        text: JSON.stringify(data.collection, null, 2),
+        text: `Found ${events.length} scheduled events:\n${JSON.stringify(events, null, 2)}`,
       },
     ],
   };
@@ -994,7 +1066,90 @@ async function cancelEvent(eventUri: string, reason?: string): Promise<any> {
   };
 }
 
+async function checkAvailability(eventTypeUri: string, startTime: string, endTime: string): Promise<any> {
+  const endpoint = `/event_type_available_times?event_type=${encodeURIComponent(eventTypeUri)}&start_time=${encodeURIComponent(startTime)}&end_time=${encodeURIComponent(endTime)}`;
 
+  const data = await calendlyRequest(endpoint);
+
+  if (!data.collection || data.collection.length === 0) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `No available time slots found between ${startTime} and ${endTime}`,
+        },
+      ],
+    };
+  }
+
+  const availableSlots = data.collection.map((slot: any) => ({
+    start_time: slot.start_time,
+    status: slot.status,
+    invitees_remaining: slot.invitees_remaining,
+  }));
+
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          {
+            event_type: eventTypeUri,
+            search_period: {
+              start: startTime,
+              end: endTime,
+            },
+            total_slots: availableSlots.length,
+            available_times: availableSlots,
+          },
+          null,
+          2
+        ),
+      },
+    ],
+  };
+}
+
+async function bookAppointment(details: { eventTypeUri: string; name: string; email: string; phone?: string }): Promise<any> {
+  // Get the event type details to fetch the scheduling URL
+  const eventTypeData = await calendlyRequest(`/event_types/${details.eventTypeUri.split('/').pop()}`);
+
+  const schedulingUrl = eventTypeData.resource.scheduling_url;
+
+  // Build pre-filled URL with customer information
+  const params = new URLSearchParams();
+  params.append('name', details.name);
+  params.append('email', details.email);
+  if (details.phone) {
+    params.append('a1', details.phone); // a1 is typically used for phone number in Calendly
+  }
+
+  const prefilledUrl = `${schedulingUrl}?${params.toString()}`;
+
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          {
+            success: true,
+            message: 'Booking link generated successfully',
+            event_name: eventTypeData.resource.name,
+            customer: {
+              name: details.name,
+              email: details.email,
+              phone: details.phone || 'Not provided',
+            },
+            scheduling_url: prefilledUrl,
+            instructions: 'Share this pre-filled link with the customer to complete their booking. The customer will be able to select their preferred time slot.',
+          },
+          null,
+          2
+        ),
+      },
+    ],
+  };
+}
 
 /**
  * Return available times for an event type for the week containing referenceDate (or this week).
