@@ -544,7 +544,9 @@ function getAllTools(): Tool[] {
 // =============================================================================
 
 async function handleSheetsTool(toolName: string, args: any): Promise<any> {
+  console.log(`[handleSheetsTool] Tool: ${toolName}, Args: ${JSON.stringify(args)}`);
   if (!sheetsClient || !GOOGLE_SHEETS_SPREADSHEET_ID) {
+    console.error(`[handleSheetsTool] Google Sheets is not configured. sheetsClient=${!!sheetsClient}, spreadsheetId=${!!GOOGLE_SHEETS_SPREADSHEET_ID}`);
     throw new Error('Google Sheets is not configured');
   }
 
@@ -604,6 +606,7 @@ async function initializeSheet(): Promise<any> {
 }
 
 async function addCustomerRecord(record: CustomerRecord): Promise<any> {
+  console.log(`[addCustomerRecord] Adding record for: ${record.name}, email: ${record.email}, phone: ${record.phone || 'N/A'}`);
   const id = randomUUID();
   const timestamp = new Date().toISOString();
 
@@ -646,15 +649,18 @@ async function addCustomerRecord(record: CustomerRecord): Promise<any> {
 }
 
 async function getCustomerRecord(id: string): Promise<any> {
+  console.log(`[getCustomerRecord] Looking up ID: ${id}`);
+  const endCol = columnLetter(HEADERS.length);
   const result = await sheetsClient.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:J`,
+    range: `${SHEET_NAME}!A:${endCol}`,
   });
 
   const rows = result.data.values || [];
   const recordRow = rows.find((row: any[]) => row[0] === id);
 
   if (!recordRow) {
+    console.log(`[getCustomerRecord] No record found for ID: ${id}`);
     return {
       content: [
         {
@@ -665,19 +671,24 @@ async function getCustomerRecord(id: string): Promise<any> {
     };
   }
 
+  // HEADERS: ID(0), Make(1), Model(2), KM(3), Name(4), Email(5), Phone(6), Issue(7), Status(8), Priority(9), Created At(10), Updated At(11), Notes(12)
   const record = {
     id: recordRow[0],
-    name: recordRow[1],
-    email: recordRow[2],
-    phone: recordRow[3],
-    issue: recordRow[4],
-    status: recordRow[5],
-    priority: recordRow[6],
-    createdAt: recordRow[7],
-    updatedAt: recordRow[8],
-    notes: recordRow[9],
+    make: recordRow[1],
+    model: recordRow[2],
+    km: recordRow[3],
+    name: recordRow[4],
+    email: recordRow[5],
+    phone: recordRow[6],
+    issue: recordRow[7],
+    status: recordRow[8],
+    priority: recordRow[9],
+    createdAt: recordRow[10],
+    updatedAt: recordRow[11],
+    notes: recordRow[12],
   };
 
+  console.log(`[getCustomerRecord] Found record for: ${record.name}`);
   return {
     content: [
       {
@@ -689,15 +700,18 @@ async function getCustomerRecord(id: string): Promise<any> {
 }
 
 async function updateCustomerRecord(update: any): Promise<any> {
+  console.log(`[updateCustomerRecord] Updating ID: ${update.id}`);
+  const endCol = columnLetter(HEADERS.length);
   const result = await sheetsClient.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:J`,
+    range: `${SHEET_NAME}!A:${endCol}`,
   });
 
   const rows = result.data.values || [];
   const rowIndex = rows.findIndex((row: any[]) => row[0] === update.id);
 
   if (rowIndex === -1) {
+    console.log(`[updateCustomerRecord] No record found for ID: ${update.id}`);
     return {
       content: [
         {
@@ -708,29 +722,34 @@ async function updateCustomerRecord(update: any): Promise<any> {
     };
   }
 
+  // HEADERS: ID(0), Make(1), Model(2), KM(3), Name(4), Email(5), Phone(6), Issue(7), Status(8), Priority(9), Created At(10), Updated At(11), Notes(12)
   const existingRow = rows[rowIndex];
   const updatedRow = [
-    existingRow[0], // ID remains the same
-    update.name !== undefined ? update.name : existingRow[1],
-    update.email !== undefined ? update.email : existingRow[2],
-    update.phone !== undefined ? update.phone : existingRow[3],
-    update.issue !== undefined ? update.issue : existingRow[4],
-    update.status !== undefined ? update.status : existingRow[5],
-    update.priority !== undefined ? update.priority : existingRow[6],
-    existingRow[7], // Created at remains the same
-    new Date().toISOString(), // Updated at
-    update.notes !== undefined ? update.notes : existingRow[9],
+    existingRow[0],  // ID remains the same
+    update.make !== undefined ? update.make : existingRow[1],
+    update.model !== undefined ? update.model : existingRow[2],
+    update.km !== undefined ? update.km : existingRow[3],
+    update.name !== undefined ? update.name : existingRow[4],
+    update.email !== undefined ? update.email : existingRow[5],
+    update.phone !== undefined ? update.phone : existingRow[6],
+    update.issue !== undefined ? update.issue : existingRow[7],
+    update.status !== undefined ? update.status : existingRow[8],
+    update.priority !== undefined ? update.priority : existingRow[9],
+    existingRow[10], // Created At remains the same
+    new Date().toISOString(), // Updated At
+    update.notes !== undefined ? update.notes : existingRow[12],
   ];
 
   await sheetsClient.spreadsheets.values.update({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A${rowIndex + 1}:J${rowIndex + 1}`,
+    range: `${SHEET_NAME}!A${rowIndex + 1}:${endCol}${rowIndex + 1}`,
     valueInputOption: 'RAW',
     requestBody: {
       values: [updatedRow],
     },
   });
 
+  console.log(`[updateCustomerRecord] Record ${update.id} updated successfully`);
   return {
     content: [
       {
@@ -786,25 +805,32 @@ async function searchCustomerRecords(criteria: any): Promise<any> {
 }
 
 async function listAllCustomers(): Promise<any> {
+  console.log('[listAllCustomers] Fetching all records');
+  const endCol = columnLetter(HEADERS.length);
   const result = await sheetsClient.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:J`,
+    range: `${SHEET_NAME}!A:${endCol}`,
   });
 
   const rows = result.data.values || [];
+  // HEADERS: ID(0), Make(1), Model(2), KM(3), Name(4), Email(5), Phone(6), Issue(7), Status(8), Priority(9), Created At(10), Updated At(11), Notes(12)
   const records = rows.slice(1).map((row: any[]) => ({
     id: row[0],
-    name: row[1],
-    email: row[2],
-    phone: row[3],
-    issue: row[4],
-    status: row[5],
-    priority: row[6],
-    createdAt: row[7],
-    updatedAt: row[8],
-    notes: row[9],
+    make: row[1],
+    model: row[2],
+    km: row[3],
+    name: row[4],
+    email: row[5],
+    phone: row[6],
+    issue: row[7],
+    status: row[8],
+    priority: row[9],
+    createdAt: row[10],
+    updatedAt: row[11],
+    notes: row[12],
   }));
 
+  console.log(`[listAllCustomers] Found ${records.length} records`);
   return {
     content: [
       {
@@ -816,25 +842,33 @@ async function listAllCustomers(): Promise<any> {
 }
 
 async function checkCustomerHistory(phoneNumber: string): Promise<any> {
+  console.log(`[checkCustomerHistory] Looking up phone: ${phoneNumber}`);
+  const endCol = columnLetter(HEADERS.length);
   const result = await sheetsClient.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:J`,
+    range: `${SHEET_NAME}!A:${endCol}`,
   });
 
   const rows = result.data.values || [];
-  const matchingRecords = rows.slice(1).filter((row: any[]) => row[3] === phoneNumber);
+  console.log(`[checkCustomerHistory] Total rows in sheet: ${rows.length - 1}`);
+  // HEADERS: ID(0), Make(1), Model(2), KM(3), Name(4), Email(5), Phone(6), Issue(7), Status(8), Priority(9), Created At(10), Updated At(11), Notes(12)
+  const matchingRecords = rows.slice(1).filter((row: any[]) => row[6] === phoneNumber);
+  console.log(`[checkCustomerHistory] Matching records for phone ${phoneNumber}: ${matchingRecords.length}`);
 
   const records = matchingRecords.map((row: any[]) => ({
     id: row[0],
-    name: row[1],
-    email: row[2],
-    phone: row[3],
-    issue: row[4],
-    status: row[5],
-    priority: row[6],
-    createdAt: row[7],
-    updatedAt: row[8],
-    notes: row[9],
+    make: row[1],
+    model: row[2],
+    km: row[3],
+    name: row[4],
+    email: row[5],
+    phone: row[6],
+    issue: row[7],
+    status: row[8],
+    priority: row[9],
+    createdAt: row[10],
+    updatedAt: row[11],
+    notes: row[12],
   }));
 
   return {
@@ -865,8 +899,11 @@ const SERVICE_PRICING: Record<string, Record<string, number>> = {
 };
 
 async function getServicePricing(serviceType: string, vehicleType: string): Promise<any> {
+  console.log(`[getServicePricing] service_type: "${serviceType}", vehicle_type: "${vehicleType}"`);
   const svcKey = (serviceType || '').toLowerCase().trim();
   const vehKey = (vehicleType || '').toLowerCase().trim();
+  console.log(`[getServicePricing] Normalized keys — service: "${svcKey}", vehicle: "${vehKey}"`);
+  console.log(`[getServicePricing] Available services: ${Object.keys(SERVICE_PRICING).join(', ')}`);
 
   const servicePrices = SERVICE_PRICING[svcKey];
   if (!servicePrices) {
@@ -1602,10 +1639,72 @@ app.use('/mcp', (req, res, next) => {
   console.log('Body:', JSON.stringify(req.body, null, 2));
   const incomingSession = req.header('Mcp-Session-Id') || req.header('mcp-session-id') || '';
   console.log('Session ID from header:', incomingSession);
-    // (removed duplicate empty log)
     console.log('Active sessions:', Array.from(activeTransports.keys()));
     console.log('========================================\n');
     next();
+});
+
+// ---------------------------------------------------------------------------
+// Early intercept for tools/call and tools/list — handle directly at Express
+// level so that clients that skip the MCP initialize handshake still get a
+// proper JSON response instead of "Server not initialized" from the SDK
+// transport.  This middleware runs BEFORE the main app.all('/mcp') handler.
+// ---------------------------------------------------------------------------
+app.post('/mcp', async (req, res, next) => {
+  try {
+    const method = req.body?.method;
+
+    // tools/list — return tool catalogue immediately
+    if (method === 'tools/list') {
+      const rpcId = req.body.id ?? null;
+      console.log('[MCP middleware] tools/list — returning tools directly');
+      res.json({
+        jsonrpc: '2.0',
+        id: rpcId,
+        result: { tools: getAllTools() },
+      });
+      return;
+    }
+
+    // tools/call — execute the tool directly and return plain JSON
+    if (method === 'tools/call') {
+      const rpcId = req.body.id ?? null;
+      const toolName: string = req.body.params?.name;
+      const toolArgs: any = req.body.params?.arguments ?? {};
+      console.log(`[MCP middleware] tools/call — tool: ${toolName}, args: ${JSON.stringify(toolArgs)}`);
+
+      try {
+        let toolResult: any;
+
+        if (toolName.startsWith('sheets_') || ['initialize_sheet', 'add_customer_record', 'get_customer_record', 'update_customer_record', 'search_customer_records', 'list_all_customers', 'check_customer_history', 'get_service_pricing'].includes(toolName)) {
+          toolResult = await handleSheetsTool(toolName, toolArgs);
+        } else if (toolName.startsWith('calendly_') || ['list_event_types', 'get_event_type', 'get_scheduling_link', 'list_scheduled_events', 'get_event_invitee', 'cancel_event', 'create_event', 'event_type_available_times', 'create_appointment', 'check_availability', 'book_appointment'].includes(toolName)) {
+          toolResult = await handleCalendlyTool(toolName, toolArgs);
+        } else if (toolName.startsWith('email_') || ['send_appointment_confirmation', 'send_appointment_reminder', 'send_custom_email'].includes(toolName)) {
+          toolResult = await handleEmailTool(toolName, toolArgs);
+        } else {
+          throw new Error(`Unknown tool: ${toolName}`);
+        }
+
+        console.log(`[MCP middleware] tools/call SUCCESS — tool: ${toolName}`);
+        res.json({ jsonrpc: '2.0', id: rpcId, result: toolResult });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`[MCP middleware] tools/call ERROR — tool: ${toolName}, error: ${errorMessage}`);
+        res.json({
+          jsonrpc: '2.0',
+          id: rpcId,
+          result: { content: [{ type: 'text', text: `Error: ${errorMessage}` }] },
+        });
+      }
+      return;
+    }
+
+    // Not tools/list or tools/call — pass to main handler
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 /**
  * MCP endpoint - Single endpoint for both POST and GET requests
@@ -1708,21 +1807,8 @@ app.all('/mcp', async (req, res) => {
         return;
       }
 
-      // If OpenAI asks for tools/list directly (common during onboarding),
-      // respond immediately from Express so the control plane gets the tool list
-      // even if a session wasn't created by initialize.
-      if (req.body && req.body.method === 'tools/list') {
-        const rpcId = req.body.id ?? null;
-        console.log('[MCP] tools/list received at Express layer — returning tools directly');
-        res.json({
-          jsonrpc: '2.0',
-          id: rpcId,
-          result: {
-            tools: getAllTools(),
-          },
-        });
-        return;
-      }
+      // tools/list and tools/call are handled by the middleware above.
+      // This handler only processes initialize and other MCP methods.
 
        if (sessionId && activeTransports.has(sessionId)) {
          // Reuse existing transport for this session
