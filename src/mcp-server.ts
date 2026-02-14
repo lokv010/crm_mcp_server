@@ -1639,10 +1639,72 @@ app.use('/mcp', (req, res, next) => {
   console.log('Body:', JSON.stringify(req.body, null, 2));
   const incomingSession = req.header('Mcp-Session-Id') || req.header('mcp-session-id') || '';
   console.log('Session ID from header:', incomingSession);
-    // (removed duplicate empty log)
     console.log('Active sessions:', Array.from(activeTransports.keys()));
     console.log('========================================\n');
     next();
+});
+
+// ---------------------------------------------------------------------------
+// Early intercept for tools/call and tools/list — handle directly at Express
+// level so that clients that skip the MCP initialize handshake still get a
+// proper JSON response instead of "Server not initialized" from the SDK
+// transport.  This middleware runs BEFORE the main app.all('/mcp') handler.
+// ---------------------------------------------------------------------------
+app.post('/mcp', async (req, res, next) => {
+  try {
+    const method = req.body?.method;
+
+    // tools/list — return tool catalogue immediately
+    if (method === 'tools/list') {
+      const rpcId = req.body.id ?? null;
+      console.log('[MCP middleware] tools/list — returning tools directly');
+      res.json({
+        jsonrpc: '2.0',
+        id: rpcId,
+        result: { tools: getAllTools() },
+      });
+      return;
+    }
+
+    // tools/call — execute the tool directly and return plain JSON
+    if (method === 'tools/call') {
+      const rpcId = req.body.id ?? null;
+      const toolName: string = req.body.params?.name;
+      const toolArgs: any = req.body.params?.arguments ?? {};
+      console.log(`[MCP middleware] tools/call — tool: ${toolName}, args: ${JSON.stringify(toolArgs)}`);
+
+      try {
+        let toolResult: any;
+
+        if (toolName.startsWith('sheets_') || ['initialize_sheet', 'add_customer_record', 'get_customer_record', 'update_customer_record', 'search_customer_records', 'list_all_customers', 'check_customer_history', 'get_service_pricing'].includes(toolName)) {
+          toolResult = await handleSheetsTool(toolName, toolArgs);
+        } else if (toolName.startsWith('calendly_') || ['list_event_types', 'get_event_type', 'get_scheduling_link', 'list_scheduled_events', 'get_event_invitee', 'cancel_event', 'create_event', 'event_type_available_times', 'create_appointment', 'check_availability', 'book_appointment'].includes(toolName)) {
+          toolResult = await handleCalendlyTool(toolName, toolArgs);
+        } else if (toolName.startsWith('email_') || ['send_appointment_confirmation', 'send_appointment_reminder', 'send_custom_email'].includes(toolName)) {
+          toolResult = await handleEmailTool(toolName, toolArgs);
+        } else {
+          throw new Error(`Unknown tool: ${toolName}`);
+        }
+
+        console.log(`[MCP middleware] tools/call SUCCESS — tool: ${toolName}`);
+        res.json({ jsonrpc: '2.0', id: rpcId, result: toolResult });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`[MCP middleware] tools/call ERROR — tool: ${toolName}, error: ${errorMessage}`);
+        res.json({
+          jsonrpc: '2.0',
+          id: rpcId,
+          result: { content: [{ type: 'text', text: `Error: ${errorMessage}` }] },
+        });
+      }
+      return;
+    }
+
+    // Not tools/list or tools/call — pass to main handler
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 /**
  * MCP endpoint - Single endpoint for both POST and GET requests
@@ -1745,63 +1807,8 @@ app.all('/mcp', async (req, res) => {
         return;
       }
 
-      // If OpenAI asks for tools/list directly (common during onboarding),
-      // respond immediately from Express so the control plane gets the tool list
-      // even if a session wasn't created by initialize.
-      if (req.body && req.body.method === 'tools/list') {
-        const rpcId = req.body.id ?? null;
-        console.log('[MCP] tools/list received at Express layer — returning tools directly');
-        res.json({
-          jsonrpc: '2.0',
-          id: rpcId,
-          result: {
-            tools: getAllTools(),
-          },
-        });
-        return;
-      }
-
-      // Intercept tools/call at Express level to return plain JSON.
-      // The StreamableHTTP transport responds with SSE format which simple
-      // HTTP clients (like the support agent's aiohttp) cannot parse as JSON.
-      if (req.body && req.body.method === 'tools/call') {
-        const rpcId = req.body.id ?? null;
-        const toolName = req.body.params?.name;
-        const toolArgs: any = req.body.params?.arguments ?? {};
-        console.log(`[MCP] tools/call received at Express layer — tool: ${toolName}, args: ${JSON.stringify(toolArgs)}`);
-
-        try {
-          let toolResult: any;
-
-          if (toolName.startsWith('sheets_') || ['initialize_sheet', 'add_customer_record', 'get_customer_record', 'update_customer_record', 'search_customer_records', 'list_all_customers', 'check_customer_history', 'get_service_pricing'].includes(toolName)) {
-            toolResult = await handleSheetsTool(toolName, toolArgs);
-          } else if (toolName.startsWith('calendly_') || ['list_event_types', 'get_event_type', 'get_scheduling_link', 'list_scheduled_events', 'get_event_invitee', 'cancel_event', 'create_event', 'event_type_available_times', 'create_appointment', 'check_availability', 'book_appointment'].includes(toolName)) {
-            toolResult = await handleCalendlyTool(toolName, toolArgs);
-          } else if (toolName.startsWith('email_') || ['send_appointment_confirmation', 'send_appointment_reminder', 'send_custom_email'].includes(toolName)) {
-            toolResult = await handleEmailTool(toolName, toolArgs);
-          } else {
-            throw new Error(`Unknown tool: ${toolName}`);
-          }
-
-          console.log(`[MCP] tools/call SUCCESS — tool: ${toolName}, result: ${JSON.stringify(toolResult).substring(0, 500)}`);
-          res.json({
-            jsonrpc: '2.0',
-            id: rpcId,
-            result: toolResult,
-          });
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          console.error(`[MCP] tools/call ERROR — tool: ${toolName}, error: ${errorMessage}`);
-          res.json({
-            jsonrpc: '2.0',
-            id: rpcId,
-            result: {
-              content: [{ type: 'text', text: `Error: ${errorMessage}` }],
-            },
-          });
-        }
-        return;
-      }
+      // tools/list and tools/call are handled by the middleware above.
+      // This handler only processes initialize and other MCP methods.
 
        if (sessionId && activeTransports.has(sessionId)) {
          // Reuse existing transport for this session
