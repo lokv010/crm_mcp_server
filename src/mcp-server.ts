@@ -1724,6 +1724,46 @@ app.all('/mcp', async (req, res) => {
         return;
       }
 
+      // Intercept tools/call at Express level to return plain JSON.
+      // The StreamableHTTP transport responds with SSE format which simple
+      // HTTP clients (like the support agent's aiohttp) cannot parse as JSON.
+      if (req.body && req.body.method === 'tools/call') {
+        const rpcId = req.body.id ?? null;
+        const toolName = req.body.params?.name;
+        const toolArgs: any = req.body.params?.arguments ?? {};
+        console.log(`[MCP] tools/call received at Express layer — tool: ${toolName}`);
+
+        try {
+          let toolResult: any;
+
+          if (toolName.startsWith('sheets_') || ['initialize_sheet', 'add_customer_record', 'get_customer_record', 'update_customer_record', 'search_customer_records', 'list_all_customers', 'check_customer_history', 'get_service_pricing'].includes(toolName)) {
+            toolResult = await handleSheetsTool(toolName, toolArgs);
+          } else if (toolName.startsWith('calendly_') || ['list_event_types', 'get_event_type', 'get_scheduling_link', 'list_scheduled_events', 'get_event_invitee', 'cancel_event', 'create_event', 'event_type_available_times', 'create_appointment', 'check_availability', 'book_appointment'].includes(toolName)) {
+            toolResult = await handleCalendlyTool(toolName, toolArgs);
+          } else if (toolName.startsWith('email_') || ['send_appointment_confirmation', 'send_appointment_reminder', 'send_custom_email'].includes(toolName)) {
+            toolResult = await handleEmailTool(toolName, toolArgs);
+          } else {
+            throw new Error(`Unknown tool: ${toolName}`);
+          }
+
+          res.json({
+            jsonrpc: '2.0',
+            id: rpcId,
+            result: toolResult,
+          });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          res.json({
+            jsonrpc: '2.0',
+            id: rpcId,
+            result: {
+              content: [{ type: 'text', text: `Error: ${errorMessage}` }],
+            },
+          });
+        }
+        return;
+      }
+
        if (sessionId && activeTransports.has(sessionId)) {
          // Reuse existing transport for this session
          console.log(`♻️ Reusing existing session: ${sessionId}`);

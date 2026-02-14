@@ -185,6 +185,11 @@ export class MCPBridge {
         return await server.searchCustomerRecords(args);
       case 'list_all_customers':
         return await server.listAllCustomers();
+      case 'check_customer_history':
+        return await server.checkCustomerHistory(args.phone_number);
+      case 'get_service_pricing':
+        // get_service_pricing is not on the sheets server class; handle inline
+        return await this.getServicePricingDirect(args.service_type, args.vehicle_type);
       default:
         throw new Error(`Unknown tool: ${toolName}`);
     }
@@ -213,11 +218,69 @@ export class MCPBridge {
         return await server.getEventInvitee(args.inviteeUri);
       case 'cancel_event':
         return await server.cancelEvent(args.eventUri, args.reason);
+      case 'check_availability':
+        return await server.checkAvailability(args.eventTypeUri, args.startTime, args.endTime);
+      case 'book_appointment':
+        return await server.bookAppointment(args);
       case 'create_event':
-            return await server.createEvent(args as any);
+      case 'create_appointment':
+        return await server.createEvent(args as any);
+      case 'event_type_available_times':
+        return await server.checkAvailability(args.eventTypeUri, args.startTime || '', args.endTime || '');
       default:
         throw new Error(`Unknown tool: ${toolName}`);
     }
+  }
+
+  /**
+   * Inline handler for get_service_pricing (not part of GoogleSheetsMCPServer)
+   */
+  private static readonly SERVICE_PRICING: Record<string, Record<string, number>> = {
+    'oil change':            { sedan: 49, suv: 59, truck: 69 },
+    'full service':          { sedan: 199, suv: 249, truck: 299 },
+    'brake service':         { sedan: 149, suv: 179, truck: 209 },
+    'tire rotation':         { sedan: 39, suv: 49, truck: 55 },
+    'engine diagnostic':     { sedan: 89, suv: 89, truck: 99 },
+    'transmission service':  { sedan: 179, suv: 219, truck: 259 },
+    'ac service':            { sedan: 129, suv: 149, truck: 159 },
+    'battery replacement':   { sedan: 159, suv: 169, truck: 189 },
+    'wheel alignment':       { sedan: 89, suv: 99, truck: 109 },
+    'coolant flush':         { sedan: 99, suv: 119, truck: 139 },
+  };
+
+  private async getServicePricingDirect(serviceType: string, vehicleType: string): Promise<any> {
+    const svcKey = (serviceType || '').toLowerCase().trim();
+    const vehKey = (vehicleType || '').toLowerCase().trim();
+
+    const servicePrices = MCPBridge.SERVICE_PRICING[svcKey];
+    if (!servicePrices) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify({
+          error: `Unknown service type: "${serviceType}"`,
+          available_services: Object.keys(MCPBridge.SERVICE_PRICING).join(', '),
+        }, null, 2) }],
+      };
+    }
+
+    const price = servicePrices[vehKey];
+    if (price === undefined) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify({
+          error: `Unknown vehicle type: "${vehicleType}"`,
+          available_vehicle_types: Object.keys(servicePrices).join(', '),
+        }, null, 2) }],
+      };
+    }
+
+    return {
+      content: [{ type: 'text', text: JSON.stringify({
+        service_type: serviceType,
+        vehicle_type: vehicleType,
+        price,
+        currency: 'USD',
+        formatted_price: `$${price}`,
+      }, null, 2) }],
+    };
   }
 
   /**
