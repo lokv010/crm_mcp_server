@@ -135,9 +135,9 @@ function createMCPServer(): Server {
     }
     try {
       // Route to appropriate tool handler
-      if (name.startsWith('sheets_') || ['initialize_sheet', 'add_customer_record', 'get_customer_record', 'update_customer_record', 'search_customer_records', 'list_all_customers', 'check_customer_history'].includes(name)) {
+      if (name.startsWith('sheets_') || ['initialize_sheet', 'add_customer_record', 'get_customer_record', 'update_customer_record', 'search_customer_records', 'list_all_customers', 'check_customer_history', 'get_service_pricing'].includes(name)) {
         return await handleSheetsTool(name, args);
-      } else if (name.startsWith('calendly_') || ['list_event_types', 'get_event_type', 'get_scheduling_link', 'list_scheduled_events', 'get_event_invitee', 'cancel_event','create_event','event_type_available_times'].includes(name)) {
+      } else if (name.startsWith('calendly_') || ['list_event_types', 'get_event_type', 'get_scheduling_link', 'list_scheduled_events', 'get_event_invitee', 'cancel_event','create_event','event_type_available_times','create_appointment','check_availability','book_appointment'].includes(name)) {
         return await handleCalendlyTool(name, args);
       } else if (name.startsWith('email_') || ['send_appointment_confirmation', 'send_appointment_reminder', 'send_custom_email'].includes(name)) {
         return await handleEmailTool(name, args);
@@ -276,6 +276,24 @@ function getAllTools(): Tool[] {
           },
           required: ['phone_number'],
         },
+      },
+      {
+        name: 'get_service_pricing',
+        description: 'Get pricing for a car service based on service type and vehicle type',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            service_type: {
+              type: 'string',
+              description: 'Type of service (e.g., oil change, full service, brake service, tire rotation, engine diagnostic, transmission service, ac service, battery replacement)',
+            },
+            vehicle_type: {
+              type: 'string',
+              description: 'Type of vehicle (e.g., sedan, suv, truck)',
+            },
+          },
+          required: ['service_type', 'vehicle_type'],
+        },
       }
     );
   }
@@ -349,10 +367,15 @@ function getAllTools(): Tool[] {
       },
       {
         name: 'list_scheduled_events',
-        description: 'List scheduled events within a date range',
+        description: 'List scheduled events, optionally filtered by status or date range',
         inputSchema: {
           type: 'object',
           properties: {
+            status: {
+              type: 'string',
+              enum: ['active', 'canceled'],
+              description: 'Filter events by status',
+            },
             minStartTime: {
               type: 'string',
               description: 'Minimum start time (ISO 8601 format)',
@@ -394,6 +417,70 @@ function getAllTools(): Tool[] {
             },
           },
           required: ['eventUri'],
+        },
+      },
+      {
+        name: 'check_availability',
+        description: 'Check available appointment slots for a specific event type within a date range',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            eventTypeUri: {
+              type: 'string',
+              description: 'The URI of the event type to check availability for',
+            },
+            startTime: {
+              type: 'string',
+              description: 'Start time for availability search (ISO 8601 format, e.g., 2024-01-15T00:00:00Z)',
+            },
+            endTime: {
+              type: 'string',
+              description: 'End time for availability search (ISO 8601 format, e.g., 2024-01-22T23:59:59Z)',
+            },
+          },
+          required: ['eventTypeUri', 'startTime', 'endTime'],
+        },
+      },
+      {
+        name: 'book_appointment',
+        description: 'Generate a pre-filled scheduling link for booking an appointment with customer information',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            eventTypeUri: {
+              type: 'string',
+              description: 'The URI of the event type to book',
+            },
+            name: {
+              type: 'string',
+              description: 'Customer name',
+            },
+            email: {
+              type: 'string',
+              description: 'Customer email address',
+            },
+            phone: {
+              type: 'string',
+              description: 'Customer phone number (optional)',
+            },
+          },
+          required: ['eventTypeUri', 'name', 'email'],
+        },
+      },
+      {
+        name: 'create_appointment',
+        description: 'Create an appointment booking for a customer with scheduling link and optional preferred date/time',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            eventTypeUri: { type: 'string', description: 'Event type URI (use list_event_types to find available types)' },
+            customerName: { type: 'string', description: 'Customer name' },
+            customerEmail: { type: 'string', description: 'Customer email' },
+            customerPhone: { type: 'string', description: 'Phone number (optional)' },
+            preferredDate: { type: 'string', description: 'Preferred ISO datetime (optional, e.g. 2025-12-15T10:00:00Z)' },
+            notes: { type: 'string', description: 'Booking notes (optional)' },
+          },
+          required: ['eventTypeUri', 'customerName', 'customerEmail'],
         },
       }
     );
@@ -476,6 +563,8 @@ async function handleSheetsTool(toolName: string, args: any): Promise<any> {
       return await listAllCustomers();
     case 'check_customer_history':
       return await checkCustomerHistory(args.phone_number);
+    case 'get_service_pricing':
+      return await getServicePricing(args.service_type, args.vehicle_type);
     default:
       throw new Error(`Unknown Google Sheets tool: ${toolName}`);
   }
@@ -759,6 +848,69 @@ async function checkCustomerHistory(phoneNumber: string): Promise<any> {
 }
 
 // =============================================================================
+// Service Pricing
+// =============================================================================
+
+const SERVICE_PRICING: Record<string, Record<string, number>> = {
+  'oil change':            { sedan: 49, suv: 59, truck: 69 },
+  'full service':          { sedan: 199, suv: 249, truck: 299 },
+  'brake service':         { sedan: 149, suv: 179, truck: 209 },
+  'tire rotation':         { sedan: 39, suv: 49, truck: 55 },
+  'engine diagnostic':     { sedan: 89, suv: 89, truck: 99 },
+  'transmission service':  { sedan: 179, suv: 219, truck: 259 },
+  'ac service':            { sedan: 129, suv: 149, truck: 159 },
+  'battery replacement':   { sedan: 159, suv: 169, truck: 189 },
+  'wheel alignment':       { sedan: 89, suv: 99, truck: 109 },
+  'coolant flush':         { sedan: 99, suv: 119, truck: 139 },
+};
+
+async function getServicePricing(serviceType: string, vehicleType: string): Promise<any> {
+  const svcKey = (serviceType || '').toLowerCase().trim();
+  const vehKey = (vehicleType || '').toLowerCase().trim();
+
+  const servicePrices = SERVICE_PRICING[svcKey];
+  if (!servicePrices) {
+    const availableServices = Object.keys(SERVICE_PRICING).join(', ');
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          error: `Unknown service type: "${serviceType}"`,
+          available_services: availableServices,
+        }, null, 2),
+      }],
+    };
+  }
+
+  const price = servicePrices[vehKey];
+  if (price === undefined) {
+    const availableVehicles = Object.keys(servicePrices).join(', ');
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          error: `Unknown vehicle type: "${vehicleType}"`,
+          available_vehicle_types: availableVehicles,
+        }, null, 2),
+      }],
+    };
+  }
+
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        service_type: serviceType,
+        vehicle_type: vehicleType,
+        price,
+        currency: 'USD',
+        formatted_price: `$${price}`,
+      }, null, 2),
+    }],
+  };
+}
+
+// =============================================================================
 // Calendly Tool Handlers
 // =============================================================================
 
@@ -782,8 +934,13 @@ async function handleCalendlyTool(toolName: string, args: any): Promise<any> {
       return await getEventInvitee(args.inviteeUri);
     case 'cancel_event':
       return await cancelEvent(args.eventUri, args.reason);
+    case 'check_availability':
+      return await checkAvailability(args.eventTypeUri, args.startTime, args.endTime);
+    case 'book_appointment':
+      return await bookAppointment(args);
     case 'create_event':
-      return await createEvent(args);    
+    case 'create_appointment':
+      return await createEvent(args);
     default:
       throw new Error(`Unknown Calendly tool: ${toolName}`);
   }
@@ -848,6 +1005,9 @@ async function getSchedulingLink(eventTypeUri: string): Promise<any> {
 
 async function listScheduledEvents(params: any): Promise<any> {
   let queryParams = `organization=${encodeURIComponent(CALENDLY_ORGANIZATION_URI!)}`;
+  if (params.status) {
+    queryParams += `&status=${encodeURIComponent(params.status)}`;
+  }
   if (params.minStartTime) {
     queryParams += `&min_start_time=${encodeURIComponent(params.minStartTime)}`;
   }
@@ -856,11 +1016,23 @@ async function listScheduledEvents(params: any): Promise<any> {
   }
 
   const data = await calendlyRequest(`/scheduled_events?${queryParams}`);
+
+  const events = data.collection.map((event: any) => ({
+    uri: event.uri,
+    name: event.name,
+    status: event.status,
+    start_time: event.start_time,
+    end_time: event.end_time,
+    event_type: event.event_type,
+    location: event.location,
+    invitees_counter: event.invitees_counter,
+  }));
+
   return {
     content: [
       {
         type: 'text',
-        text: JSON.stringify(data.collection, null, 2),
+        text: `Found ${events.length} scheduled events:\n${JSON.stringify(events, null, 2)}`,
       },
     ],
   };
@@ -894,7 +1066,90 @@ async function cancelEvent(eventUri: string, reason?: string): Promise<any> {
   };
 }
 
+async function checkAvailability(eventTypeUri: string, startTime: string, endTime: string): Promise<any> {
+  const endpoint = `/event_type_available_times?event_type=${encodeURIComponent(eventTypeUri)}&start_time=${encodeURIComponent(startTime)}&end_time=${encodeURIComponent(endTime)}`;
 
+  const data = await calendlyRequest(endpoint);
+
+  if (!data.collection || data.collection.length === 0) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `No available time slots found between ${startTime} and ${endTime}`,
+        },
+      ],
+    };
+  }
+
+  const availableSlots = data.collection.map((slot: any) => ({
+    start_time: slot.start_time,
+    status: slot.status,
+    invitees_remaining: slot.invitees_remaining,
+  }));
+
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          {
+            event_type: eventTypeUri,
+            search_period: {
+              start: startTime,
+              end: endTime,
+            },
+            total_slots: availableSlots.length,
+            available_times: availableSlots,
+          },
+          null,
+          2
+        ),
+      },
+    ],
+  };
+}
+
+async function bookAppointment(details: { eventTypeUri: string; name: string; email: string; phone?: string }): Promise<any> {
+  // Get the event type details to fetch the scheduling URL
+  const eventTypeData = await calendlyRequest(`/event_types/${details.eventTypeUri.split('/').pop()}`);
+
+  const schedulingUrl = eventTypeData.resource.scheduling_url;
+
+  // Build pre-filled URL with customer information
+  const params = new URLSearchParams();
+  params.append('name', details.name);
+  params.append('email', details.email);
+  if (details.phone) {
+    params.append('a1', details.phone); // a1 is typically used for phone number in Calendly
+  }
+
+  const prefilledUrl = `${schedulingUrl}?${params.toString()}`;
+
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          {
+            success: true,
+            message: 'Booking link generated successfully',
+            event_name: eventTypeData.resource.name,
+            customer: {
+              name: details.name,
+              email: details.email,
+              phone: details.phone || 'Not provided',
+            },
+            scheduling_url: prefilledUrl,
+            instructions: 'Share this pre-filled link with the customer to complete their booking. The customer will be able to select their preferred time slot.',
+          },
+          null,
+          2
+        ),
+      },
+    ],
+  };
+}
 
 /**
  * Return available times for an event type for the week containing referenceDate (or this week).
