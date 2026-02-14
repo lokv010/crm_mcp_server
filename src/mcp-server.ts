@@ -593,9 +593,10 @@ async function addCustomerRecord(record: CustomerRecord): Promise<any> {
 }
 
 async function getCustomerRecord(id: string): Promise<any> {
+  const endCol = columnLetter(HEADERS.length);
   const result = await sheetsClient.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:J`,
+    range: `${SHEET_NAME}!A:${endCol}`,
   });
 
   const rows = result.data.values || [];
@@ -612,17 +613,21 @@ async function getCustomerRecord(id: string): Promise<any> {
     };
   }
 
+  // HEADERS: ID(0), Make(1), Model(2), KM(3), Name(4), Email(5), Phone(6), Issue(7), Status(8), Priority(9), Created At(10), Updated At(11), Notes(12)
   const record = {
     id: recordRow[0],
-    name: recordRow[1],
-    email: recordRow[2],
-    phone: recordRow[3],
-    issue: recordRow[4],
-    status: recordRow[5],
-    priority: recordRow[6],
-    createdAt: recordRow[7],
-    updatedAt: recordRow[8],
-    notes: recordRow[9],
+    make: recordRow[1],
+    model: recordRow[2],
+    km: recordRow[3],
+    name: recordRow[4],
+    email: recordRow[5],
+    phone: recordRow[6],
+    issue: recordRow[7],
+    status: recordRow[8],
+    priority: recordRow[9],
+    createdAt: recordRow[10],
+    updatedAt: recordRow[11],
+    notes: recordRow[12],
   };
 
   return {
@@ -636,9 +641,10 @@ async function getCustomerRecord(id: string): Promise<any> {
 }
 
 async function updateCustomerRecord(update: any): Promise<any> {
+  const endCol = columnLetter(HEADERS.length);
   const result = await sheetsClient.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:J`,
+    range: `${SHEET_NAME}!A:${endCol}`,
   });
 
   const rows = result.data.values || [];
@@ -655,23 +661,27 @@ async function updateCustomerRecord(update: any): Promise<any> {
     };
   }
 
+  // HEADERS: ID(0), Make(1), Model(2), KM(3), Name(4), Email(5), Phone(6), Issue(7), Status(8), Priority(9), Created At(10), Updated At(11), Notes(12)
   const existingRow = rows[rowIndex];
   const updatedRow = [
     existingRow[0], // ID remains the same
-    update.name !== undefined ? update.name : existingRow[1],
-    update.email !== undefined ? update.email : existingRow[2],
-    update.phone !== undefined ? update.phone : existingRow[3],
-    update.issue !== undefined ? update.issue : existingRow[4],
-    update.status !== undefined ? update.status : existingRow[5],
-    update.priority !== undefined ? update.priority : existingRow[6],
-    existingRow[7], // Created at remains the same
+    update.make !== undefined ? update.make : existingRow[1],
+    update.model !== undefined ? update.model : existingRow[2],
+    update.km !== undefined ? update.km : existingRow[3],
+    update.name !== undefined ? update.name : existingRow[4],
+    update.email !== undefined ? update.email : existingRow[5],
+    update.phone !== undefined ? update.phone : existingRow[6],
+    update.issue !== undefined ? update.issue : existingRow[7],
+    update.status !== undefined ? update.status : existingRow[8],
+    update.priority !== undefined ? update.priority : existingRow[9],
+    existingRow[10], // Created at remains the same
     new Date().toISOString(), // Updated at
-    update.notes !== undefined ? update.notes : existingRow[9],
+    update.notes !== undefined ? update.notes : existingRow[12],
   ];
 
   await sheetsClient.spreadsheets.values.update({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A${rowIndex + 1}:J${rowIndex + 1}`,
+    range: `${SHEET_NAME}!A${rowIndex + 1}:${endCol}${rowIndex + 1}`,
     valueInputOption: 'RAW',
     requestBody: {
       values: [updatedRow],
@@ -733,23 +743,28 @@ async function searchCustomerRecords(criteria: any): Promise<any> {
 }
 
 async function listAllCustomers(): Promise<any> {
+  const endCol = columnLetter(HEADERS.length);
   const result = await sheetsClient.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:J`,
+    range: `${SHEET_NAME}!A:${endCol}`,
   });
 
   const rows = result.data.values || [];
+  // HEADERS: ID(0), Make(1), Model(2), KM(3), Name(4), Email(5), Phone(6), Issue(7), Status(8), Priority(9), Created At(10), Updated At(11), Notes(12)
   const records = rows.slice(1).map((row: any[]) => ({
     id: row[0],
-    name: row[1],
-    email: row[2],
-    phone: row[3],
-    issue: row[4],
-    status: row[5],
-    priority: row[6],
-    createdAt: row[7],
-    updatedAt: row[8],
-    notes: row[9],
+    make: row[1],
+    model: row[2],
+    km: row[3],
+    name: row[4],
+    email: row[5],
+    phone: row[6],
+    issue: row[7],
+    status: row[8],
+    priority: row[9],
+    createdAt: row[10],
+    updatedAt: row[11],
+    notes: row[12],
   }));
 
   return {
@@ -763,25 +778,34 @@ async function listAllCustomers(): Promise<any> {
 }
 
 async function checkCustomerHistory(phoneNumber: string): Promise<any> {
+  const endCol = columnLetter(HEADERS.length);
   const result = await sheetsClient.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:J`,
+    range: `${SHEET_NAME}!A:${endCol}`,
   });
 
   const rows = result.data.values || [];
-  const matchingRecords = rows.slice(1).filter((row: any[]) => row[3] === phoneNumber);
+  // HEADERS: ID(0), Make(1), Model(2), KM(3), Name(4), Email(5), Phone(6), Issue(7), Status(8), Priority(9), Created At(10), Updated At(11), Notes(12)
+  // Phone is at index 6
+  const matchingRecords = rows.slice(1).filter((row: any[]) => {
+    const phone = (row[6] || '').toString().trim();
+    return phone === phoneNumber.trim();
+  });
 
   const records = matchingRecords.map((row: any[]) => ({
     id: row[0],
-    name: row[1],
-    email: row[2],
-    phone: row[3],
-    issue: row[4],
-    status: row[5],
-    priority: row[6],
-    createdAt: row[7],
-    updatedAt: row[8],
-    notes: row[9],
+    make: row[1],
+    model: row[2],
+    km: row[3],
+    name: row[4],
+    email: row[5],
+    phone: row[6],
+    issue: row[7],
+    status: row[8],
+    priority: row[9],
+    createdAt: row[10],
+    updatedAt: row[11],
+    notes: row[12],
   }));
 
   return {
@@ -1486,8 +1510,8 @@ app.all('/mcp', async (req, res) => {
        }
 
        transport = activeTransports.get(sessionId)!;
-+      // echo session id on GET responses to ensure client can read it
-+      setSessionHeaders(res, sessionId);
+       // echo session id on GET responses to ensure client can read it
+       setSessionHeaders(res, sessionId);
        await transport.handleRequest(req, res);
        return;
      }
