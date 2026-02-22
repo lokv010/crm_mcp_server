@@ -1614,6 +1614,79 @@ app.get('/health', (req, res) => {
   });
 });
 
+// =============================================================================
+// Direct Function Execution Endpoints (no MCP protocol)
+// Used by support_agent WebSocket sideband handler to call CRM tools directly.
+// =============================================================================
+
+/**
+ * GET /tools — return all tool definitions as plain JSON (OpenAI function format).
+ */
+app.get('/tools', (req, res) => {
+  res.json({ tools: getAllTools() });
+});
+
+/**
+ * POST /execute — execute a CRM tool function directly, bypassing MCP protocol.
+ *
+ * Request body: { "name": "<tool_name>", "arguments": { ... } }
+ * Response:     { "result": "<text output>" }  on success
+ *               { "error":  "<message>" }       on failure (HTTP 400/500)
+ */
+app.post('/execute', async (req, res) => {
+  const { name, arguments: args } = req.body || {};
+
+  if (!name || typeof name !== 'string') {
+    res.status(400).json({ error: 'Request body must include "name" (string)' });
+    return;
+  }
+
+  console.log(`[/execute] tool=${name} args=${JSON.stringify(args).slice(0, 200)}`);
+
+  const sheetsTools = [
+    'initialize_sheet', 'add_customer_record', 'get_customer_record',
+    'update_customer_record', 'search_customer_records', 'list_all_customers',
+    'check_customer_history', 'get_service_pricing',
+  ];
+  const calendlyTools = [
+    'list_event_types', 'get_event_type', 'get_scheduling_link',
+    'list_scheduled_events', 'get_event_invitee', 'cancel_event',
+    'create_event', 'event_type_available_times', 'create_appointment',
+    'check_availability', 'book_appointment',
+  ];
+  const emailTools = [
+    'send_appointment_confirmation', 'send_appointment_reminder', 'send_custom_email',
+  ];
+
+  try {
+    let toolResult: any;
+
+    if (name.startsWith('sheets_') || sheetsTools.includes(name)) {
+      toolResult = await handleSheetsTool(name, args || {});
+    } else if (name.startsWith('calendly_') || calendlyTools.includes(name)) {
+      toolResult = await handleCalendlyTool(name, args || {});
+    } else if (name.startsWith('email_') || emailTools.includes(name)) {
+      toolResult = await handleEmailTool(name, args || {});
+    } else {
+      res.status(400).json({ error: `Unknown tool: ${name}` });
+      return;
+    }
+
+    // Unwrap MCP-style { content: [{ type, text }] } → plain string
+    const content: any[] = toolResult?.content ?? [];
+    const resultText: string = content.length > 0
+      ? content[0].text ?? JSON.stringify(toolResult)
+      : JSON.stringify(toolResult);
+
+    console.log(`[/execute] tool=${name} OK — result length=${resultText.length}`);
+    res.json({ result: resultText });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[/execute] tool=${name} ERROR — ${msg}`);
+    res.status(500).json({ error: msg });
+  }
+});
+
 // 🆕 ADD THIS - Root endpoint for MCP discovery
 app.get('/', (req, res) => {
   res.json({
@@ -1637,13 +1710,8 @@ app.use('/mcp', (req, res, next) => {
   console.log('Method:', req.method);
   console.log('Headers:', JSON.stringify(req.headers, null, 2));
   console.log('Body:', JSON.stringify(req.body, null, 2));
-<<<<<<< HEAD
   const incomingSession = req.header('Mcp-Session-Id') || req.header('mcp-session-id') || '';
   console.log('Session ID from header:', incomingSession);
-=======
-  // const incomingSession = req.header('Mcp-Session-Id') || req.header('mcp-session-id') || '';
-  // console.log('Session ID from header:', incomingSession);
->>>>>>> c05793d (mcp-removed the session-id for mcp server requests)
     console.log('Active sessions:', Array.from(activeTransports.keys()));
     console.log('========================================\n');
     next();
@@ -1655,7 +1723,6 @@ app.use('/mcp', (req, res, next) => {
 // proper JSON response instead of "Server not initialized" from the SDK
 // transport.  This middleware runs BEFORE the main app.all('/mcp') handler.
 // ---------------------------------------------------------------------------
-<<<<<<< HEAD
 app.post('/mcp', async (req, res, next) => {
   try {
     const method = req.body?.method;
@@ -1712,90 +1779,6 @@ app.post('/mcp', async (req, res, next) => {
     next(err);
   }
 });
-=======
-// Insert after line 1706 (after the /health endpoint)
-
-/**
- * Direct tool execution handler - bypasses session requirement
- * OpenAI Realtime API may not preserve sessions across calls
- */
-app.post('/mcp', express.json(), async (req, res, next) => {
-  const body = req.body;
-  
-  // Only handle tools/call and tools/list - let initialize fall through
-  if (body?.method !== 'tools/call' && body?.method !== 'tools/list') {
-    return next(); // Pass to main handler
-  }
-  
-  console.log(`[MCP] Direct ${body.method} - bypassing session requirement`);
-  
-  try {
-    if (body.method === 'tools/list') {
-      // Return tools directly
-      res.json({
-        jsonrpc: '2.0',
-        id: body.id,
-        result: { tools: getAllTools() }
-      });
-      return;
-    }
-    
-    if (body.method === 'tools/call') {
-      const { name, arguments: args } = body.params || {};
-      
-      console.log(`[MCP] Executing tool: ${name}`);
-      console.log(`[MCP] Arguments:`, JSON.stringify(args, null, 2));
-      
-      let result;
-      
-      // Route to appropriate handler (same logic as CallToolRequestSchema)
-      if (name.startsWith('sheets_') || [
-        'initialize_sheet', 'add_customer_record', 'get_customer_record',
-        'update_customer_record', 'search_customer_records', 'list_all_customers',
-        'check_customer_history', 'get_service_pricing'
-      ].includes(name)) {
-        result = await handleSheetsTool(name, args || {});
-      } else if (name.startsWith('calendly_') || [
-        'list_event_types', 'get_event_type', 'get_scheduling_link',
-        'list_scheduled_events', 'get_event_invitee', 'cancel_event',
-        'create_event', 'event_type_available_times', 'create_appointment',
-        'check_availability', 'book_appointment'
-      ].includes(name)) {
-        result = await handleCalendlyTool(name, args || {});
-      } else if (name.startsWith('email_') || [
-        'send_appointment_confirmation', 'send_appointment_reminder', 'send_custom_email'
-      ].includes(name)) {
-        result = await handleEmailTool(name, args || {});
-      } else {
-        throw new Error(`Unknown tool: ${name}`);
-      }
-      
-      console.log(`[MCP] Tool result:`, JSON.stringify(result).substring(0, 200));
-      
-      res.json({
-        jsonrpc: '2.0',
-        id: body.id,
-        result
-      });
-      return;
-    }
-  } catch (error) {
-    console.error(`[MCP] Tool execution error:`, error);
-    res.json({
-      jsonrpc: '2.0',
-      id: body.id,
-      error: {
-        code: -32603,
-        message: error instanceof Error ? error.message : 'Tool execution failed',
-        data: { tool: body.params?.name }
-      }
-    });
-    return;
-  }
-});
-
-// Main MCP handler follows (your existing code starting at line 1707)
->>>>>>> c05793d (mcp-removed the session-id for mcp server requests)
 /**
  * MCP endpoint - Single endpoint for both POST and GET requests
  * POST: Client sends JSON-RPC messages
@@ -1970,45 +1953,19 @@ app.all('/mcp', async (req, res) => {
         return;
       }
 
-<<<<<<< HEAD
       // tools/list and tools/call are handled by the middleware above.
       // This handler only processes initialize and other MCP methods.
 
-       if (sessionId && activeTransports.has(sessionId)) {
-         // Reuse existing transport for this session
-         console.log(`♻️ Reusing existing session: ${sessionId}`);
-         currentSessionId = sessionId;
-         transport = activeTransports.get(sessionId)!;
-       } else {
-         // Create new transport - generate session ID first
-         currentSessionId = randomUUID();
-         console.log(`✨ Creating new session: ${currentSessionId}`);
-         
-         transport = new StreamableHTTPServerTransport({
-           sessionIdGenerator: () => currentSessionId,
-           onsessioninitialized: (sid: string) => {
-             activeTransports.set(sid, transport);
-             console.log(`✓ Session ${sid} initialized and stored in activeTransports`);
-           },
-           onsessionclosed: (sid: string) => {
-             activeTransports.delete(sid);
-             console.log(`✓ Session ${sid} closed and removed from activeTransports`);
-           },
-         });
-
-         // Connect transport to the MCP server
-         await mcpServer.connect(transport);
-       }
-=======
-      // For other POST methods, create or reuse transport
       if (sessionId && activeTransports.has(sessionId)) {
+        // Reuse existing transport for this session
         console.log(`♻️ Reusing existing session: ${sessionId}`);
         currentSessionId = sessionId;
         transport = activeTransports.get(sessionId)!;
       } else {
+        // Create new transport - generate session ID first
         currentSessionId = randomUUID();
         console.log(`✨ Creating new session: ${currentSessionId}`);
-        
+
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => currentSessionId,
           onsessioninitialized: (sid: string) => {
@@ -2021,9 +1978,9 @@ app.all('/mcp', async (req, res) => {
           },
         });
 
+        // Connect transport to the MCP server
         await mcpServer.connect(transport);
       }
->>>>>>> c05793d (mcp-removed the session-id for mcp server requests)
  
       setSessionHeaders(res, currentSessionId);
       console.log('[MCP] set Mcp-Session-Id header (HTTP response):', currentSessionId);
