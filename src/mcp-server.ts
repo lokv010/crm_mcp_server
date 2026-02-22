@@ -128,7 +128,7 @@ function createMCPServer(): Server {
       const sessionId = (globalThis as any).crypto?.randomUUID?.() ?? Date.now().toString();
       setSessionHeaders(res, sessionId);
       return {
-        headers: { 'Mcp-Session-Id': sessionId, 'Access-Control-Expose-Headers': 'Mcp-Session-Id' },
+        headers: { 'Access-Control-Expose-Headers': 'Mcp-Session-Id' },
         content: [{ type: 'text', text: 'Initialized' }],
         sessionId,
       };
@@ -210,7 +210,7 @@ function getAllTools(): Tool[] {
       },
       {
         name: 'get_customer_record',
-        description: 'Retrieve a specific customer record by ID',
+        description: 'YOU MUST CALL THIS IMMEDIATELY when you hear a phone number. Do not respond to the customer until you call this and get the result. This returns their name and vehicle so you can greet them properly.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -279,7 +279,7 @@ function getAllTools(): Tool[] {
       },
       {
         name: 'get_service_pricing',
-        description: 'Get pricing for a car service based on service type and vehicle type',
+        description: "YOU MUST CALL THIS before quoting ANY price. Never say a price without calling this first. Customer is waiting for an accurate quote.",
         inputSchema: {
           type: 'object',
           properties: {
@@ -421,7 +421,7 @@ function getAllTools(): Tool[] {
       },
       {
         name: 'check_availability',
-        description: 'Check available appointment slots for a specific event type within a date range',
+        description: 'YOU MUST CALL THIS before suggesting appointment times. Do not make up time slots. Customer needs real availability.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -1594,7 +1594,7 @@ function validateOrigin(req: express.Request): boolean {
 
   try {
     const originUrl = new URL(origin);
-    const allowedHosts = ['localhost', '127.0.0.1', 'openai.com','ngrok-free.app', 'ngrok.app','api.openai.com'];
+    const allowedHosts = ['localhost', '127.0.0.1', 'openai.com','ngrok-free.app', 'ngrok.app','api.openai.com','loca.lt'];
     return allowedHosts.some(host => originUrl.hostname === host || originUrl.hostname.endsWith(`.${host}`));
   } catch {
     return false;
@@ -1637,8 +1637,13 @@ app.use('/mcp', (req, res, next) => {
   console.log('Method:', req.method);
   console.log('Headers:', JSON.stringify(req.headers, null, 2));
   console.log('Body:', JSON.stringify(req.body, null, 2));
+<<<<<<< HEAD
   const incomingSession = req.header('Mcp-Session-Id') || req.header('mcp-session-id') || '';
   console.log('Session ID from header:', incomingSession);
+=======
+  // const incomingSession = req.header('Mcp-Session-Id') || req.header('mcp-session-id') || '';
+  // console.log('Session ID from header:', incomingSession);
+>>>>>>> c05793d (mcp-removed the session-id for mcp server requests)
     console.log('Active sessions:', Array.from(activeTransports.keys()));
     console.log('========================================\n');
     next();
@@ -1650,6 +1655,7 @@ app.use('/mcp', (req, res, next) => {
 // proper JSON response instead of "Server not initialized" from the SDK
 // transport.  This middleware runs BEFORE the main app.all('/mcp') handler.
 // ---------------------------------------------------------------------------
+<<<<<<< HEAD
 app.post('/mcp', async (req, res, next) => {
   try {
     const method = req.body?.method;
@@ -1706,6 +1712,90 @@ app.post('/mcp', async (req, res, next) => {
     next(err);
   }
 });
+=======
+// Insert after line 1706 (after the /health endpoint)
+
+/**
+ * Direct tool execution handler - bypasses session requirement
+ * OpenAI Realtime API may not preserve sessions across calls
+ */
+app.post('/mcp', express.json(), async (req, res, next) => {
+  const body = req.body;
+  
+  // Only handle tools/call and tools/list - let initialize fall through
+  if (body?.method !== 'tools/call' && body?.method !== 'tools/list') {
+    return next(); // Pass to main handler
+  }
+  
+  console.log(`[MCP] Direct ${body.method} - bypassing session requirement`);
+  
+  try {
+    if (body.method === 'tools/list') {
+      // Return tools directly
+      res.json({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: { tools: getAllTools() }
+      });
+      return;
+    }
+    
+    if (body.method === 'tools/call') {
+      const { name, arguments: args } = body.params || {};
+      
+      console.log(`[MCP] Executing tool: ${name}`);
+      console.log(`[MCP] Arguments:`, JSON.stringify(args, null, 2));
+      
+      let result;
+      
+      // Route to appropriate handler (same logic as CallToolRequestSchema)
+      if (name.startsWith('sheets_') || [
+        'initialize_sheet', 'add_customer_record', 'get_customer_record',
+        'update_customer_record', 'search_customer_records', 'list_all_customers',
+        'check_customer_history', 'get_service_pricing'
+      ].includes(name)) {
+        result = await handleSheetsTool(name, args || {});
+      } else if (name.startsWith('calendly_') || [
+        'list_event_types', 'get_event_type', 'get_scheduling_link',
+        'list_scheduled_events', 'get_event_invitee', 'cancel_event',
+        'create_event', 'event_type_available_times', 'create_appointment',
+        'check_availability', 'book_appointment'
+      ].includes(name)) {
+        result = await handleCalendlyTool(name, args || {});
+      } else if (name.startsWith('email_') || [
+        'send_appointment_confirmation', 'send_appointment_reminder', 'send_custom_email'
+      ].includes(name)) {
+        result = await handleEmailTool(name, args || {});
+      } else {
+        throw new Error(`Unknown tool: ${name}`);
+      }
+      
+      console.log(`[MCP] Tool result:`, JSON.stringify(result).substring(0, 200));
+      
+      res.json({
+        jsonrpc: '2.0',
+        id: body.id,
+        result
+      });
+      return;
+    }
+  } catch (error) {
+    console.error(`[MCP] Tool execution error:`, error);
+    res.json({
+      jsonrpc: '2.0',
+      id: body.id,
+      error: {
+        code: -32603,
+        message: error instanceof Error ? error.message : 'Tool execution failed',
+        data: { tool: body.params?.name }
+      }
+    });
+    return;
+  }
+});
+
+// Main MCP handler follows (your existing code starting at line 1707)
+>>>>>>> c05793d (mcp-removed the session-id for mcp server requests)
 /**
  * MCP endpoint - Single endpoint for both POST and GET requests
  * POST: Client sends JSON-RPC messages
@@ -1718,46 +1808,128 @@ app.post('/mcp', async (req, res, next) => {
  */
 app.all('/mcp', async (req, res) => {
   try {
-    // Validate Origin header for security
-    if (!validateOrigin(req)) {
-      console.warn(`Invalid origin: ${req.headers.origin}`);
-      res.status(403).send('Forbidden: Invalid origin');
+    const body = req.body;
+    
+    // ========================================================================
+    // DIRECT TOOL EXECUTION - NO SESSION REQUIRED
+    // ========================================================================
+    if (req.method === 'POST' && (body?.method === 'tools/call' || body?.method === 'tools/list')) {
+      console.log(`[MCP Direct] ${body.method} - bypassing session requirement`);
+      
+      try {
+        // Handle tools/list
+        if (body.method === 'tools/list') {
+          console.log('[MCP] tools/list received at Express layer — returning tools directly');
+          res.json({
+            jsonrpc: '2.0',
+            id: body.id,
+            result: { tools: getAllTools() }
+          });
+          return;
+        }
+        
+        // Handle tools/call
+        if (body.method === 'tools/call') {
+          const { name, arguments: args } = body.params || {};
+          
+          console.log(`[MCP] Executing tool: ${name}`);
+          console.log(`[MCP] Arguments:`, JSON.stringify(args, null, 2));
+          
+          let result;
+          
+          // Route to appropriate handler
+          if (name.startsWith('sheets_') || [
+            'initialize_sheet', 'add_customer_record', 'get_customer_record',
+            'update_customer_record', 'search_customer_records', 'list_all_customers',
+            'check_customer_history', 'get_service_pricing'
+          ].includes(name)) {
+            result = await handleSheetsTool(name, args || {});
+          } else if (name.startsWith('calendly_') || [
+            'list_event_types', 'get_event_type', 'get_scheduling_link',
+            'list_scheduled_events', 'get_event_invitee', 'cancel_event',
+            'create_event', 'event_type_available_times', 'create_appointment',
+            'check_availability', 'book_appointment'
+          ].includes(name)) {
+            result = await handleCalendlyTool(name, args || {});
+          } else if (name.startsWith('email_') || [
+            'send_appointment_confirmation', 'send_appointment_reminder', 'send_custom_email'
+          ].includes(name)) {
+            result = await handleEmailTool(name, args || {});
+          } else {
+            throw new Error(`Unknown tool: ${name}`);
+          }
+          
+          console.log(`[MCP] Tool result:`, JSON.stringify(result).substring(0, 200));
+          
+          res.json({
+            jsonrpc: '2.0',
+            id: body.id,
+            result
+          });
+          return;
+        }
+      } catch (error) {
+        console.error(`[MCP] Tool execution error:`, error);
+        res.json({
+          jsonrpc: '2.0',
+          id: body.id,
+          error: {
+            code: -32603,
+            message: error instanceof Error ? error.message : 'Tool execution failed',
+            data: { tool: body.params?.name }
+          }
+        });
+        return;
+      }
+    }
+    
+    // ========================================================================
+    // ORIGINAL SESSION-BASED HANDLER (for initialize and SSE streaming)
+    // ========================================================================
+    
+    // Origin validation
+    const origin = req.headers.origin;
+    const allowedOrigins = [
+      'https://agent-builder.platform.openai.com',
+      'https://builder.platform.openai.com',
+      'https://chatgpt.com',
+    ];
+
+    if (origin && !allowedOrigins.includes(origin)) {
+      console.warn(`[MCP] Blocked request from disallowed origin: ${origin}`);
+      res.status(403).send('Forbidden: Invalid Origin');
       return;
     }    
     
     // normalize incoming header and ignore empty values
     const rawSession = req.header('Mcp-Session-Id') || req.header('mcp-session-id') || '';
     const sessionId = String(rawSession).trim() || undefined;
-     let transport: StreamableHTTPServerTransport;
-     let currentSessionId: string;
+    let transport: StreamableHTTPServerTransport;
+    let currentSessionId: string;
  
-     // Handle GET request (SSE stream)
-     if (req.method === 'GET') {
-       // For GET requests, session must already exist
-       if (!sessionId || !activeTransports.has(sessionId)) {
-         res.status(400).send('Bad Request: Session not found. Initialize session first via POST /mcp');
-         return;
-       }
+    // Handle GET request (SSE stream)
+    if (req.method === 'GET') {
+      // For GET requests, session must already exist
+      if (!sessionId || !activeTransports.has(sessionId)) {
+        res.status(400).send('Bad Request: Session not found. Initialize session first via POST /mcp');
+        return;
+      }
 
-       transport = activeTransports.get(sessionId)!;
-+      // echo session id on GET responses to ensure client can read it
-+      setSessionHeaders(res, sessionId);
-       await transport.handleRequest(req, res);
-       return;
-     }
+      transport = activeTransports.get(sessionId)!;
+      setSessionHeaders(res, sessionId);
+      await transport.handleRequest(req, res);
+      return;
+    }
  
-     // Handle POST request (JSON-RPC messages)
-     if (req.method === 'POST') {
+    // Handle POST request (JSON-RPC messages)
+    if (req.method === 'POST') {
       const acceptHeader = String(req.headers.accept || '').toLowerCase();
-      // Prefer Express content negotiation but be permissive: log unexpected values and continue
       const accepted = req.accepts(['application/json', 'text/event-stream', '*/*']);
       if (!accepted) {
         console.warn(`[MCP] Unexpected Accept header: "${acceptHeader}". Proceeding anyway for compatibility.`);
       }
 
-      // If client is calling initialize via JSON-RPC, handle it here so we can
-      // guarantee the HTTP response contains Mcp-Session-Id header.
-      // This avoids relying on the SDK transport to propagate custom headers.
+      // Handle initialize method specially
       if (req.body && req.body.method === 'initialize') {
         const rpcId = req.body.id ?? null;
         currentSessionId = randomUUID();
@@ -1775,24 +1947,15 @@ app.all('/mcp', async (req, res) => {
           },
         });
 
-        // connect transport so SDK handlers are wired for subsequent calls/GET SSE
         await mcpServer.connect(transport);
-
-        // Immediately register the transport so subsequent requests can find it
         activeTransports.set(currentSessionId, transport);
         console.log(`✓ Session ${currentSessionId} immediately stored in activeTransports`);
 
-        // set header on the real Express response (best-effort)
         setSessionHeaders(res, currentSessionId);
         console.log('[MCP] sent Mcp-Session-Id header for initialize:', currentSessionId);
 
-        // Forward the initialize JSON-RPC to the SDK transport so the server
-        // processes the handshake and marks the session initialized.
-        // This lets the SDK update its internal state (tools, session ready).
         await transport.handleRequest(req, res, req.body);
 
-        // transport.handleRequest should send the JSON-RPC response; if it
-        // does not, fall back to sending a minimal initialize result.
         if (!res.headersSent) {
           res.json({
             jsonrpc: '2.0',
@@ -1807,6 +1970,7 @@ app.all('/mcp', async (req, res) => {
         return;
       }
 
+<<<<<<< HEAD
       // tools/list and tools/call are handled by the middleware above.
       // This handler only processes initialize and other MCP methods.
 
@@ -1835,15 +1999,38 @@ app.all('/mcp', async (req, res) => {
          // Connect transport to the MCP server
          await mcpServer.connect(transport);
        }
+=======
+      // For other POST methods, create or reuse transport
+      if (sessionId && activeTransports.has(sessionId)) {
+        console.log(`♻️ Reusing existing session: ${sessionId}`);
+        currentSessionId = sessionId;
+        transport = activeTransports.get(sessionId)!;
+      } else {
+        currentSessionId = randomUUID();
+        console.log(`✨ Creating new session: ${currentSessionId}`);
+        
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => currentSessionId,
+          onsessioninitialized: (sid: string) => {
+            activeTransports.set(sid, transport);
+            console.log(`✓ Session ${sid} initialized and stored in activeTransports`);
+          },
+          onsessionclosed: (sid: string) => {
+            activeTransports.delete(sid);
+            console.log(`✓ Session ${sid} closed and removed from activeTransports`);
+          },
+        });
+
+        await mcpServer.connect(transport);
+      }
+>>>>>>> c05793d (mcp-removed the session-id for mcp server requests)
  
-      // ensure HTTP response includes the session id before transport writes
       setSessionHeaders(res, currentSessionId);
       console.log('[MCP] set Mcp-Session-Id header (HTTP response):', currentSessionId);
 
-      // Handle the request
-     await transport.handleRequest(req, res, req.body);
-       return;
-     }
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
  
     // Method not allowed
     res.status(405).send('Method Not Allowed');
@@ -1861,6 +2048,7 @@ app.all('/mcp', async (req, res) => {
     }
   }
 });
+
 
 
 
